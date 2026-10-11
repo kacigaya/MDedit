@@ -10,7 +10,10 @@ let package = Package(
     ],
     targets: [
         .target(name: "MarkdownKit"),
-        .executableTarget(name: "MdEdit", dependencies: ["MarkdownKit"]),
+        // The text storage's hottest primitives, in Objective-C so TextKit's
+        // calls do not cross into Swift.
+        .target(name: "TextStorageBase"),
+        .executableTarget(name: "MdEdit", dependencies: ["MarkdownKit", "TextStorageBase"]),
         // The Quick Look preview extension. An app extension starts in
         // NSExtensionMain rather than main; Scripts/make-app.sh wraps the
         // binary in an .appex inside the app.

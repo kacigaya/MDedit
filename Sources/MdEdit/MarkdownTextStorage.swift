@@ -1,10 +1,10 @@
 import AppKit
 import MarkdownKit
+import TextStorageBase
 
 /// The text storage that makes the editor WYSIWYG: every edit reparses the
 /// lines it touched and restyles exactly those.
-final class MarkdownTextStorage: NSTextStorage {
-    private let backing = NSMutableAttributedString()
+final class MarkdownTextStorage: MDBackedTextStorage {
     private(set) var structure: BlockStructure
     /// The document's link and footnote definitions, so `[label]` links resolve.
     private(set) var references = LinkReferences.lenient
@@ -335,73 +335,16 @@ final class MarkdownTextStorage: NSTextStorage {
         return copy
     }
 
-    /// The inherited version asks `string` for its length, which after an
-    /// edit means copying the whole document.
-    override var length: Int { backing.length }
-
     /// The text, without the copy: valid until the next edit.
     private var text: NSString { backing.mutableString }
 
-    /// Answered from the backing directly; the inherited version goes through
-    /// `attributes(at:)`, bridging a whole dictionary to read one value.
-    override func attribute(
-        _ attrName: NSAttributedString.Key,
-        at location: Int,
-        effectiveRange range: NSRangePointer?
-    ) -> Any? {
-        backing.attribute(attrName, at: location, effectiveRange: range)
-    }
-
-    /// The inherited version walks runs one call at a time; attribute fixing
-    /// asks this on every edit.
-    override func attribute(
-        _ attrName: NSAttributedString.Key,
-        at location: Int,
-        longestEffectiveRange range: NSRangePointer?,
-        in rangeLimit: NSRange
-    ) -> Any? {
-        // Attribute fixing looks for glyph info from the edit out to both
-        // ends of the document, walking every run, on every keystroke. Styling
-        // sets each edited line's attributes whole before fixing runs, so
-        // there is never any to find.
-        if attrName == .glyphInfo {
-            range?.pointee = rangeLimit
-            return nil
-        }
-        return backing.attribute(attrName, at: location, longestEffectiveRange: range, in: rangeLimit)
-    }
-
-    override func attributes(
-        at location: Int,
-        longestEffectiveRange range: NSRangePointer?,
-        in rangeLimit: NSRange
-    ) -> [NSAttributedString.Key: Any] {
-        guard backing.length > 0 else { return [:] }
-        return backing.attributes(at: location, longestEffectiveRange: range, in: rangeLimit)
-    }
-
-    override func attributes(
-        at location: Int,
-        effectiveRange range: NSRangePointer?
-    ) -> [NSAttributedString.Key: Any] {
-        guard backing.length > 0 else { return [:] }
-        return backing.attributes(at: location, effectiveRange: range)
-    }
+    // Length and attribute access, which TextKit calls run by run, are
+    // answered by `MDBackedTextStorage` without crossing into Swift.
 
     override func replaceCharacters(in range: NSRange, with str: String) {
-        beginEditing()
         cachedString = nil
         editGeneration += 1
-        backing.replaceCharacters(in: range, with: str)
-        edited(.editedCharacters, range: range, changeInLength: (str as NSString).length - range.length)
-        endEditing()
-    }
-
-    override func setAttributes(_ attrs: [NSAttributedString.Key: Any]?, range: NSRange) {
-        beginEditing()
-        backing.setAttributes(attrs, range: range)
-        edited(.editedAttributes, range: range, changeInLength: 0)
-        endEditing()
+        super.replaceCharacters(in: range, with: str)
     }
 
     /// Font fixing swaps Apple Color Emoji off a shortcode's closing colon,
