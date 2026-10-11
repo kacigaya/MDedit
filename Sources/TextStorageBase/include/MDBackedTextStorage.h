@@ -14,6 +14,12 @@ NS_ASSUME_NONNULL_BEGIN
 /// that report their own edits.
 @property (nonatomic, readonly) NSMutableAttributedString *backing;
 
+/// Adds attributes to the backing from a plain dictionary, built once and
+/// reused. Handed a Swift dictionary, Foundation looks each key up through a
+/// bridging wrapper, several times over. An `NSDictionary`, typed `id` so
+/// Swift does not import it as a dictionary and bridge it straight back.
+- (void)addBackingAttributes:(id)attributes range:(NSRange)range;
+
 @end
 
 NS_ASSUME_NONNULL_END

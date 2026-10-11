@@ -59,4 +59,8 @@
     [self endEditing];
 }
 
+- (void)addBackingAttributes:(id)attributes range:(NSRange)range {
+    [_backing addAttributes:attributes range:range];
+}
+
 @end

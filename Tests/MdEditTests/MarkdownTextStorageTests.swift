@@ -149,4 +149,19 @@ struct MarkdownTextStorageTests {
         #expect(code.isFixedPitch)
         _ = whole
     }
+
+    @Test("Markers styled from the cache match styling from scratch through mode and theme changes")
+    func markerCacheFollowsModeAndTheme() {
+        let text = PerformanceTests.document(lines: 200)
+        let changed = storage(text)
+        changed.revealedLines = 3...8
+        changed.sourceMode = true
+        changed.theme = .dark
+        changed.sourceMode = false
+        let fresh = MarkdownTextStorage(theme: .dark)
+        fresh.replaceCharacters(in: NSRange(location: 0, length: 0), with: text)
+        fresh.revealedLines = 3...8
+        let whole = NSRange(location: 0, length: fresh.length)
+        #expect(changed.attributedSubstring(from: whole).isEqual(to: fresh.attributedSubstring(from: whole)))
+    }
 }

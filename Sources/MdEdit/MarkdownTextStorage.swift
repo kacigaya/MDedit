@@ -238,6 +238,7 @@ final class MarkdownTextStorage: MDBackedTextStorage {
             // changes and on any setting; restyle only when it differs.
             guard theme != oldValue else { return }
             styles.removeAll()
+            markerAttributes.removeAll()
             restyleAll()
         }
     }
@@ -1258,9 +1259,28 @@ final class MarkdownTextStorage: MDBackedTextStorage {
         destination.isEmpty ? "Undefined reference" : "\(destination)\n⌘-click to open"
     }
 
+    /// What a marker's attributes depend on, besides the theme.
+    private struct MarkerStyle: Hashable {
+        var kind: MarkerKind
+        var revealed: Bool
+        var font: NSFont
+        var sourceMode: Bool
+    }
+
+    /// Markers' attributes, built once each as a plain dictionary: markers
+    /// are most of the attribute runs in a document, and handed a Swift
+    /// dictionary, Foundation bridges and hashes every key it looks up,
+    /// several times over. Cleared when the theme changes.
+    private var markerAttributes: [MarkerStyle: NSDictionary] = [:]
+
     private func applyMarker(_ marker: Marker, lineStart: Int, revealed: Bool, baseFont: NSFont) {
         let range = NSRange(location: lineStart + marker.range.location, length: marker.range.length)
         guard range.length > 0, NSMaxRange(range) <= backing.length else { return }
+        let key = MarkerStyle(kind: marker.kind, revealed: revealed, font: baseFont, sourceMode: sourceMode)
+        if let cached = markerAttributes[key] {
+            addBackingAttributes(cached, range: range)
+            return
+        }
 
         var attributes: [NSAttributedString.Key: Any] = [
             .mdMarker: marker.kind.rawValue,
@@ -1287,6 +1307,8 @@ final class MarkdownTextStorage: MDBackedTextStorage {
         }
         // Source mode keeps markers as typed: no bullets, boxes or clicks.
         if sourceMode { attributes[.mdMarker] = nil }
-        backing.addAttributes(attributes, range: range)
+        let built = NSDictionary(dictionary: attributes)
+        markerAttributes[key] = built
+        addBackingAttributes(built, range: range)
     }
 }
