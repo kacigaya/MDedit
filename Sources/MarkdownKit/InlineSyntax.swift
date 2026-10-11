@@ -121,19 +121,39 @@ private func isDomainLabel(_ label: Substring) -> Bool {
     return label.allSatisfy { $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "-") }
 }
 
+/// Where a search for each raw HTML terminator came up empty in a run of
+/// text, so later searches there give up at once: otherwise every unclosed
+/// `<!--` in a paragraph scans to its end again, as cmark's scanned flags avoid.
+struct RawHTMLMemo {
+    fileprivate var exhausted: [String: Int] = [:]
+}
+
 /// Raw HTML as CommonMark defines it: an open or closing tag, a comment, a
 /// processing instruction, a declaration or a CDATA section. Returns the end.
 func parseRawHTML(_ characters: [UInt16], at index: Int, limit: Int) -> Int? {
+    var memo = RawHTMLMemo()
+    return parseRawHTML(characters, at: index, limit: limit, memo: &memo)
+}
+
+/// The same, remembering in `memo` where terminators are missing; `memo` is
+/// only valid for the same characters and limit.
+func parseRawHTML(_ characters: [UInt16], at index: Int, limit: Int, memo: inout RawHTMLMemo) -> Int? {
     guard index + 1 < limit, characters[index] == UInt16(ascii: "<") else { return nil }
     let next = characters[index + 1]
 
     func find(_ terminator: String, from start: Int) -> Int? {
+        // None from an earlier start means none from this one either.
+        if let exhausted = memo.exhausted[terminator], start >= exhausted { return nil }
         let units = Array(terminator.utf16)
         var cursor = start
-        while cursor + units.count <= limit {
-            if Array(characters[cursor..<(cursor + units.count)]) == units { return cursor + units.count }
-            cursor += 1
+        search: while cursor + units.count <= limit {
+            for offset in units.indices where characters[cursor + offset] != units[offset] {
+                cursor += 1
+                continue search
+            }
+            return cursor + units.count
         }
+        memo.exhausted[terminator] = start
         return nil
     }
     func hasPrefix(_ prefix: String) -> Bool {
@@ -444,17 +464,23 @@ func parseBareURL(_ characters: [UInt16], at index: Int, limit: Int) -> InlineMa
 /// `$…$` inline or `$$…$$` display math. An inline span must hug its
 /// content — `$ 5` or `5 $` does not open or close one — and a closing `$`
 /// followed by a digit is a price, not the end of a formula.
-func parseMath(_ characters: [UInt16], at index: Int, limit: Int) -> InlineMatch? {
+///
+/// `memo` remembers where a search for a closer came up empty, so a
+/// paragraph of unclosed `$`s is not scanned to its end from each of them.
+func parseMath(_ characters: [UInt16], at index: Int, limit: Int, memo: inout MathMemo) -> InlineMatch? {
     let display = index + 1 < limit && characters[index + 1] == UInt16(ascii: "$")
     let delimiter = display ? 2 : 1
     let start = index + delimiter
     guard start < limit else { return nil }
     if !display, isUnicodeWhitespace(characters[start]) { return nil }
+    if let exhausted = display ? memo.display : memo.inline, start >= exhausted { return nil }
 
     var cursor = start
+    var sawEscape = false
     while cursor < limit {
         let character = characters[cursor]
         if character == UInt16(ascii: "\\") {
+            sawEscape = true
             cursor += 2
             continue
         }
@@ -470,7 +496,18 @@ func parseMath(_ characters: [UInt16], at index: Int, limit: Int) -> InlineMatch
         }
         cursor += 1
     }
+    // A later start sees a subset of the closers this one did, unless an
+    // escape shifted which characters the scan stepped over.
+    if !sawEscape {
+        if display { memo.display = start } else { memo.inline = start }
+    }
     return nil
+}
+
+/// Where a search for a closing `$` or `$$` came up empty in a run of text.
+struct MathMemo {
+    fileprivate var inline: Int?
+    fileprivate var display: Int?
 }
 
 private func mathMatch(index: Int, start: Int, close: Int, delimiter: Int, display: Bool) -> InlineMatch {

@@ -191,16 +191,19 @@ private struct Parser {
         var piece: Int
         var start: Int
         var isImage: Bool
-        /// Cleared once a link closes after it: links do not nest.
-        var active = true
     }
 
     private var extensions: SyntaxExtensions { references.extensions }
 
     private var pieces: [Piece] = []
     private var brackets: [Bracket] = []
+    /// Link openers below this index in `brackets` are inactive: a link closed
+    /// after them, and links do not nest. Image openers stay active.
+    private var inactiveLinksBelow = 0
     private var cursor = 0
     private var textStart = 0
+    private var rawHTMLMemo = RawHTMLMemo()
+    private var mathMemo = MathMemo()
 
     init(characters: [UInt16], low: Int, high: Int, references: LinkReferences) {
         self.characters = characters
@@ -270,7 +273,7 @@ private struct Parser {
                 emit(autolink.node, end: autolink.end)
                 return
             }
-            if let end = parseRawHTML(characters, at: cursor, limit: high) {
+            if let end = parseRawHTML(characters, at: cursor, limit: high, memo: &rawHTMLMemo) {
                 emit(.rawHTML(NSRange(location: cursor, length: end - cursor)), end: end)
                 return
             }
@@ -316,7 +319,7 @@ private struct Parser {
             return
 
         case UInt16(ascii: "$") where extensions.contains(.math):
-            if let math = parseMath(characters, at: cursor, limit: high) {
+            if let math = parseMath(characters, at: cursor, limit: high, memo: &mathMemo) {
                 emit(math.node, end: math.end)
                 return
             }
@@ -416,8 +419,8 @@ private struct Parser {
             cursor += 1
             return
         }
-        guard bracket.active else {
-            brackets.removeLast()
+        guard bracket.isImage || brackets.count - 1 >= inactiveLinksBelow else {
+            popBracket()
             cursor += 1
             return
         }
@@ -425,7 +428,7 @@ private struct Parser {
         let textStartIndex = bracket.start + (bracket.isImage ? 2 : 1)
         guard let target = linkTarget(textStart: textStartIndex, close: close) else {
             // Not a link: the brackets stay text.
-            brackets.removeLast()
+            popBracket()
             cursor += 1
             return
         }
@@ -443,12 +446,15 @@ private struct Parser {
             : .link(range: range, markers: markers, destination: target.destination, title: target.title, children: unlinked(children))
         pieces.removeSubrange(bracket.piece...)
         pieces.append(.node(node))
-        brackets.removeLast()
-        if !bracket.isImage {
-            for index in brackets.indices where !brackets[index].isImage { brackets[index].active = false }
-        }
+        popBracket()
+        if !bracket.isImage { inactiveLinksBelow = brackets.count }
         cursor = target.end
         textStart = target.end
+    }
+
+    private mutating func popBracket() {
+        brackets.removeLast()
+        inactiveLinksBelow = min(inactiveLinksBelow, brackets.count)
     }
 
     /// What follows `]`: an inline `(destination "title")`, or a full,
@@ -460,8 +466,8 @@ private struct Parser {
             return inline
         }
 
-        let text = string(characters, from: textStart, to: close)
-        var label = text
+        // The link text is the label unless a full reference names another.
+        var label: String?
         var end = after
         var isShortcut = true
         if after < high, characters[after] == UInt16(ascii: "[") {
@@ -474,8 +480,12 @@ private struct Parser {
                 isShortcut = false
             }
         }
-        guard isValidLabel(label) else { return nil }
-        if let definition = references.links[normalizeLabel(label)] {
+        // Labels run to 999 code units at most; copying a longer span to find
+        // that out made nested brackets quadratic.
+        guard label != nil || close - textStart <= 999 else { return nil }
+        let resolved = label ?? string(characters, from: textStart, to: close)
+        guard isValidLabel(resolved) else { return nil }
+        if let definition = references.links[normalizeLabel(resolved)] {
             return (end, definition.destination, definition.title)
         }
         // The editor styles `[text][label]` before the label is defined.
@@ -494,35 +504,67 @@ private struct Parser {
     }
 
     /// The spec's "process emphasis", over the delimiters after `bottom`.
+    ///
+    /// Works on the pieces after `bottom` as a linked list, with the
+    /// delimiters linked again among themselves, as cmark does: splicing each
+    /// match into the array moved everything after it, which made a long run
+    /// of emphasis quadratic. Opener floors are source positions, which a
+    /// match never shifts.
     private mutating func processEmphasis(above bottom: Int) {
-        var openersBottom: [OpenerKey: Int] = [:]
-        var closerIndex = nextDelimiter(after: bottom)
+        let first = bottom + 1
+        guard first < pieces.count else { return }
+        var items = Array(pieces[first...])
+        let count = items.count
+        // The order of the pieces, and of the delimiters among them; -1 ends.
+        var next = Array(1...count), previous = Array(-1..<(count - 1))
+        next[count - 1] = -1
+        var nextDelimiter = [Int](repeating: -1, count: count)
+        var previousDelimiter = [Int](repeating: -1, count: count)
+        var head = 0, firstDelimiter = -1, last = -1
+        for index in items.indices {
+            guard case .delimiter = items[index] else { continue }
+            if last >= 0 { nextDelimiter[last] = index } else { firstDelimiter = index }
+            previousDelimiter[index] = last
+            last = index
+        }
+        func unlink(_ index: Int) {
+            if previous[index] >= 0 { next[previous[index]] = next[index] } else { head = next[index] }
+            if next[index] >= 0 { previous[next[index]] = previous[index] }
+        }
+        func unlinkDelimiter(_ index: Int) {
+            if previousDelimiter[index] >= 0 { nextDelimiter[previousDelimiter[index]] = nextDelimiter[index] }
+            if nextDelimiter[index] >= 0 { previousDelimiter[nextDelimiter[index]] = previousDelimiter[index] }
+        }
 
-        while let index = closerIndex {
-            guard case let .delimiter(closer) = pieces[index], closer.canClose else {
-                closerIndex = nextDelimiter(after: index)
+        var openersBottom: [OpenerKey: Int] = [:]
+        var closerIndex = firstDelimiter
+        while closerIndex >= 0 {
+            let index = closerIndex
+            guard case let .delimiter(closer) = items[index], closer.canClose else {
+                closerIndex = nextDelimiter[index]
                 continue
             }
             let key = OpenerKey(character: closer.character, canOpen: closer.canOpen, lengthModulo: closer.originalLength % 3)
-            let floor = max(bottom, openersBottom[key] ?? bottom)
+            let floor = openersBottom[key] ?? Int.min
 
             var openerIndex: Int?
-            var search = index - 1
-            while search > floor {
-                if case let .delimiter(opener) = pieces[search], opener.character == closer.character,
-                   opener.canOpen, matches(opener, closer) {
+            var search = previousDelimiter[index]
+            while search >= 0, case let .delimiter(opener) = items[search], opener.start >= floor {
+                if opener.character == closer.character, opener.canOpen, matches(opener, closer) {
                     openerIndex = search
                     break
                 }
-                search -= 1
+                search = previousDelimiter[search]
             }
 
-            guard let found = openerIndex, case var .delimiter(opener) = pieces[found] else {
-                openersBottom[key] = index - 1
+            guard let found = openerIndex, case var .delimiter(opener) = items[found] else {
+                // No opener for this kind of closer at or before here, ever.
+                openersBottom[key] = closer.start
+                closerIndex = nextDelimiter[index]
                 if !closer.canOpen {
-                    pieces[index] = .text(closer.start, closer.start + closer.length)
+                    items[index] = .text(closer.start, closer.start + closer.length)
+                    unlinkDelimiter(index)
                 }
-                closerIndex = nextDelimiter(after: index)
                 continue
             }
 
@@ -532,43 +574,71 @@ private struct Parser {
             default: closer.length >= 2 && opener.length >= 2 ? 2 : 1
             }
             let openMarker = opener.start + opener.length - count
-            let children = nodes(pieces[(found + 1)..<index])
+            // The pieces between become the node's children, and leave the list.
+            var inner: [Piece] = []
+            var cursor = next[found]
+            while cursor != index {
+                inner.append(items[cursor])
+                cursor = next[cursor]
+            }
             let node = emphasisNode(
                 character: closer.character,
                 count: count,
                 range: NSRange(location: openMarker, length: closerCopy.start + count - openMarker),
                 markers: [marker(openMarker, count), marker(closerCopy.start, count)],
-                children: children
+                children: nodes(inner)
             )
             opener.length -= count
             closerCopy.start += count
             closerCopy.length -= count
 
-            var replacement: [Piece] = []
-            if opener.length > 0 { replacement.append(.delimiter(opener)) }
-            replacement.append(.node(node))
-            if closerCopy.length > 0 { replacement.append(.delimiter(closerCopy)) }
-            pieces.replaceSubrange(found...index, with: replacement)
+            // The node takes the first piece's place between the two, or a
+            // new one if they are side by side.
+            var slot = next[found]
+            if slot == index {
+                items.append(.node(node))
+                next.append(index)
+                previous.append(found)
+                nextDelimiter.append(-1)
+                previousDelimiter.append(-1)
+                slot = items.count - 1
+                next[found] = slot
+            } else {
+                items[slot] = .node(node)
+            }
+            next[slot] = index
+            previous[index] = slot
+            // Delimiters between are text now, inside the node.
+            nextDelimiter[found] = index
+            previousDelimiter[index] = found
 
-            let nodeIndex = found + (opener.length > 0 ? 1 : 0)
-            closerIndex = closerCopy.length > 0 ? nodeIndex + 1 : nextDelimiter(after: nodeIndex)
-        }
-
-        // Whatever is left over is literal.
-        for index in pieces.indices where index > bottom {
-            if case let .delimiter(delimiter) = pieces[index] {
-                pieces[index] = .text(delimiter.start, delimiter.start + delimiter.length)
+            if opener.length > 0 {
+                items[found] = .delimiter(opener)
+            } else {
+                unlink(found)
+                unlinkDelimiter(found)
+            }
+            if closerCopy.length > 0 {
+                items[index] = .delimiter(closerCopy)
+            } else {
+                closerIndex = nextDelimiter[index]
+                unlink(index)
+                unlinkDelimiter(index)
             }
         }
-    }
 
-    private func nextDelimiter(after index: Int) -> Int? {
-        var cursor = index + 1
-        while cursor < pieces.count {
-            if case .delimiter = pieces[cursor] { return cursor }
-            cursor += 1
+        // Back into the array in order; whatever delimiter is left is literal.
+        var result: [Piece] = []
+        var cursor: Int? = head
+        while let index = cursor, index >= 0 {
+            if case let .delimiter(delimiter) = items[index] {
+                result.append(.text(delimiter.start, delimiter.start + delimiter.length))
+            } else {
+                result.append(items[index])
+            }
+            cursor = next[index]
         }
-        return nil
+        pieces.replaceSubrange(first..., with: result)
     }
 
     /// The "rule of 3" for `*` and `_`; `~` and `=` need runs of equal length.
@@ -607,7 +677,7 @@ private struct Parser {
 
     /// Pieces as nodes: leftover openers and delimiters become text, and
     /// neighbouring text merges.
-    private func nodes(_ slice: ArraySlice<Piece>) -> [InlineNode] {
+    private func nodes(_ slice: some Sequence<Piece>) -> [InlineNode] {
         var result: [InlineNode] = []
         func appendText(_ start: Int, _ end: Int) {
             guard end > start else { return }
