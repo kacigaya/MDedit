@@ -693,7 +693,7 @@ final class MainWindowController: NSWindowController {
         sidebar.files.setRoot(newWorkspace?.root)
         window?.subtitle = newWorkspace?.root.lastPathComponent ?? ""
         directoryWatcher = newWorkspace.flatMap { workspace in
-            DirectoryWatcher(url: workspace.root) { [weak self] in self?.sidebar.files.reload() }
+            DirectoryWatcher(url: workspace.root) { [weak self] change in self?.sidebar.files.folderContentsChanged(change) }
         }
         onSessionChange?()
     }

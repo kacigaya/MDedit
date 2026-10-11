@@ -8,10 +8,17 @@ import Foundation
 /// `@unchecked Sendable` because it is created on the main queue and the
 /// stream delivers there too.
 final class DirectoryWatcher: @unchecked Sendable {
-    private var stream: FSEventStreamRef?
-    private let onChange: @MainActor () -> Void
+    /// What changed: the folders whose contents did, as FSEvents reports them
+    /// (symlinks resolved), or everything, when FSEvents lost track.
+    enum Change {
+        case folders([String])
+        case everything
+    }
 
-    init?(url: URL, onChange: @escaping @MainActor () -> Void) {
+    private var stream: FSEventStreamRef?
+    private let onChange: @MainActor (Change) -> Void
+
+    init?(url: URL, onChange: @escaping @MainActor (Change) -> Void) {
         self.onChange = onChange
         var context = FSEventStreamContext(
             version: 0,
@@ -20,11 +27,17 @@ final class DirectoryWatcher: @unchecked Sendable {
             release: nil,
             copyDescription: nil
         )
-        let callback: FSEventStreamCallback = { _, info, _, _, _, _ in
+        let callback: FSEventStreamCallback = { _, info, count, paths, flags, _ in
             guard let info else { return }
             let watcher = Unmanaged<DirectoryWatcher>.fromOpaque(info).takeUnretainedValue()
+            let folders = Unmanaged<CFArray>.fromOpaque(paths).takeUnretainedValue() as? [String] ?? []
+            let lostTrack = FSEventStreamEventFlags(
+                kFSEventStreamEventFlagMustScanSubDirs | kFSEventStreamEventFlagUserDropped
+                    | kFSEventStreamEventFlagKernelDropped | kFSEventStreamEventFlagRootChanged
+            )
+            let everything = (0..<count).contains { flags[$0] & lostTrack != 0 }
             // The stream delivers on the main queue.
-            MainActor.assumeIsolated { watcher.onChange() }
+            MainActor.assumeIsolated { watcher.onChange(everything ? .everything : .folders(folders)) }
         }
         guard let stream = FSEventStreamCreate(
             kCFAllocatorDefault,
@@ -33,7 +46,7 @@ final class DirectoryWatcher: @unchecked Sendable {
             [url.path] as CFArray,
             FSEventStreamEventId(kFSEventStreamEventIdSinceNow),
             0.4,  // seconds of latency, which coalesces a save's several events
-            FSEventStreamCreateFlags(kFSEventStreamCreateFlagNoDefer)
+            FSEventStreamCreateFlags(kFSEventStreamCreateFlagNoDefer | kFSEventStreamCreateFlagUseCFTypes)
         ) else { return nil }
         self.stream = stream
         FSEventStreamSetDispatchQueue(stream, .main)

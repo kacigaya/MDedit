@@ -34,7 +34,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         UpdateChecker.checkInBackgroundIfDue()
         try? FileManager.default.createDirectory(at: ThemeCatalog.customDirectory, withIntermediateDirectories: true)
-        themeWatcher = DirectoryWatcher(url: ThemeCatalog.customDirectory) { Settings.notifyChanged() }
+        themeWatcher = DirectoryWatcher(url: ThemeCatalog.customDirectory) { _ in Settings.notifyChanged() }
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {

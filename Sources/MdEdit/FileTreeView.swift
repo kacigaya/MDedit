@@ -8,10 +8,12 @@ final class FileTreeView: NSView {
     var onChooseFolder: (() -> Void)?
 
     private let scrollView = NSScrollView()
-    private let outline = NSOutlineView()
+    let outline = NSOutlineView()
     private let emptyButton = NSButton(title: String(localized: "Open Folder…"), target: nil, action: nil)
     private var root: FileNode?
     private var theme: Theme = .light
+    /// Set when the folders changed while the tree was out of sight.
+    private var needsReload = false
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -76,10 +78,73 @@ final class FileTreeView: NSView {
     /// Re-reads the folders on disk, keeping expanded folders expanded.
     func reload() {
         guard let root else { return }
+        needsReload = false
+        keepingExpansion {
+            root.invalidate()
+            outline.reloadData()
+        }
+    }
+
+    /// Follows changes on disk. Only folders the tree has listed are read
+    /// again; changes in hidden and dependency folders, which a build, a
+    /// checkout or an install make by the thousand, are not in the tree at
+    /// all. Out of sight, the tree only notes that it is stale.
+    func folderContentsChanged(_ change: DirectoryWatcher.Change) {
+        guard let root else { return }
+        guard window != nil, !isHiddenOrHasHiddenAncestor else {
+            needsReload = true
+            return
+        }
+        guard case let .folders(paths) = change else {
+            reload()
+            return
+        }
+        let nodes = Set(paths).compactMap { listedNode(atReportedPath: $0, under: root) }
+        guard !nodes.isEmpty else { return }
+        keepingExpansion {
+            for node in nodes {
+                node.refreshChildren()
+                outline.reloadItem(node === root ? nil : node, reloadChildren: true)
+            }
+        }
+    }
+
+    override func viewDidUnhide() {
+        super.viewDidUnhide()
+        if needsReload { reload() }
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        if needsReload, window != nil, !isHiddenOrHasHiddenAncestor { reload() }
+    }
+
+    /// The listed folder a path from FSEvents names, if the tree shows it.
+    private func listedNode(atReportedPath reported: String, under root: FileNode) -> FileNode? {
+        var path = reported
+        while path.count > 1, path.hasSuffix("/") { path.removeLast() }
+        // FSEvents reports paths with symlinks resolved: /private/tmp, not /tmp.
+        let relative = [realPath(root.path), root.path].lazy.compactMap { base -> Substring? in
+            if path == base { return "" }
+            return path.hasPrefix(base + "/") ? path.dropFirst(base.count + 1) : nil
+        }.first
+        guard let relative else { return nil }
+        var node = root
+        for name in relative.split(separator: "/") {
+            guard !name.hasPrefix("."), !Workspace.skippedFolders.contains(String(name)),
+                  let child = node.listedChildren?.first(where: { $0.isDirectory && $0.url.lastPathComponent == name })
+            else { return nil }
+            node = child
+        }
+        return node.listedChildren == nil ? nil : node
+    }
+
+    /// Runs a reload, then expands what was expanded and selects what was selected.
+    private func keepingExpansion(_ reload: () -> Void) {
+        guard let root else { return }
         let expanded = expandedURLs()
         let selected = (outline.item(atRow: outline.selectedRow) as? FileNode)?.url
-        root.invalidate()
-        outline.reloadData()
+        reload()
         restoreExpansion(expanded, under: root)
         if let selected { reveal(selected, expanding: false) }
     }
@@ -229,6 +294,14 @@ extension FileTreeView: NSOutlineViewDataSource, NSOutlineViewDelegate {
     }
 }
 
+/// A path with every symlink resolved, as FSEvents reports it. Unlike
+/// `URL.resolvingSymlinksInPath()`, which drops a leading `/private`.
+func realPath(_ path: String) -> String {
+    guard let resolved = realpath(path, nil) else { return path }
+    defer { free(resolved) }
+    return String(cString: resolved)
+}
+
 /// A folder or file in the tree. Folders list their children on first use.
 final class FileNode: NSObject {
     let url: URL
@@ -264,6 +337,20 @@ final class FileNode: NSObject {
         }
         loadedChildren = sorted
         return sorted
+    }
+
+    /// The children, if this folder has been listed.
+    var listedChildren: [FileNode]? { loadedChildren }
+
+    /// Lists this folder again, keeping the nodes of children still there, so
+    /// what was listed below them stays listed.
+    func refreshChildren() {
+        guard let previous = loadedChildren else { return }
+        loadedChildren = nil
+        let kept = Dictionary(previous.map { ($0.path, $0) }, uniquingKeysWith: { first, _ in first })
+        loadedChildren = children.map { fresh in
+            kept[fresh.path].flatMap { $0.isDirectory == fresh.isDirectory ? $0 : nil } ?? fresh
+        }
     }
 
     /// Forgets loaded children everywhere below, so the next look re-reads disk.
