@@ -5,9 +5,36 @@ workflow publishes the section for a version as its release notes.
 
 ## [Unreleased]
 
+## [0.9.2] - 2026-10-11
+
+Performance, from an audit of the whole app.
+
 ### Changed
+- Large documents are fast to open and work in. At 4.5 MB: opening takes 1.6 s
+  (over a minute before), a theme, appearance or settings change 1.6 s (42 s),
+  select all 0.6 s (32 s), the first scroll to the middle 2.0 s (4.4 s), and a
+  keystroke 2.0 ms (2.9 ms).
+- A loaded image or rendered formula restyles only its own lines, not the whole
+  document; so does resizing the window.
+- Images are decoded in the background at the size the column needs and dropped
+  when no open document shows them: a 12 MP photo redraws in 3.5 ms (20 ms).
+- Malformed markdown no longer stalls export or Quick Look: 68 KB of unclosed
+  `<!--` rendered in 17.7 s, now 9 ms; long runs of emphasis, brackets and `$`
+  are linear too.
+- The Files sidebar follows changes folder by folder, ignores `.git`,
+  `node_modules` and build output, and waits while hidden: a checkout or an
+  install no longer makes the app stutter.
+- Quick Look previews the first 1 MB of a larger file, and says so.
+- Crash recovery rewrites only documents changed since their last snapshot;
+  focus mode redraws only the lines entering and leaving focus; export reads
+  KaTeX and Mermaid once.
 - Homebrew installs MdEdit as a cask: the release's app goes into /Applications,
   ready to open, with the `mdedit` command; no Xcode or build needed.
+
+### Fixed
+- Emphasis could be dropped after an earlier match in the same paragraph:
+  `_a*_*a*` rendered as `<em>a*</em>*a*`.
+- Photos taken sideways show upright.
 
 ## [0.9.1] - 2026-10-09
 
