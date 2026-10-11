@@ -28,6 +28,9 @@ extension NSAttributedString.Key {
     static let mdMath = NSAttributedString.Key("mdMath")
     /// Set on lines folded away under a heading.
     static let mdFolded = NSAttributedString.Key("mdFolded")
+    /// Set on lines still waiting for an image or a typeset formula, so its
+    /// arrival restyles those lines rather than the whole document.
+    static let mdAwaiting = NSAttributedString.Key("mdAwaiting")
 }
 
 /// Paragraph styles are shared: one per shape of line, built once.

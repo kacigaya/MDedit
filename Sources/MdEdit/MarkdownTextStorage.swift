@@ -42,7 +42,9 @@ final class MarkdownTextStorage: NSTextStorage {
     /// Images are scaled down to fit the text column.
     var maxImageWidth: CGFloat = Metrics.defaultLineWidth {
         didSet {
-            if abs(maxImageWidth - oldValue) > 1, !requestedImages.isEmpty || !requestedTypesetting.isEmpty { restyleAll() }
+            if abs(maxImageWidth - oldValue) > 1, !requestedImages.isEmpty || !requestedTypesetting.isEmpty {
+                restyleLines(carrying: [.mdImage, .mdMath, .mdAwaiting])
+            }
         }
     }
 
@@ -279,7 +281,36 @@ final class MarkdownTextStorage: NSTextStorage {
 
     @objc private func restyleForImages() {
         isImageRestyleScheduled = false
-        restyleAll()
+        restyleLines(carrying: [.mdAwaiting])
+    }
+
+    /// Whether the line being styled asked for an image or formula that is
+    /// not ready yet.
+    private var lineAwaits = false
+
+    /// Restyles just the lines with any of these attributes: a scan of the
+    /// runs, where restyling everything would rebuild them all.
+    private func restyleLines(carrying keys: [NSAttributedString.Key]) {
+        var lines = IndexSet()
+        let whole = NSRange(location: 0, length: backing.length)
+        for key in keys {
+            backing.enumerateAttribute(key, in: whole, options: .longestEffectiveRangeNotRequired) { value, range, _ in
+                guard value != nil, range.length > 0 else { return }
+                lines.insert(integersIn: line(at: range.location)...line(at: NSMaxRange(range) - 1))
+            }
+        }
+        let touched = lines.rangeView.compactMap { clampedLineRange($0.lowerBound...($0.upperBound - 1)) }.map(expandedToTypesetBlocks)
+        guard !touched.isEmpty else { return }
+        beginEditing()
+        for range in touched {
+            applyStyles(lineRange: range)
+            edited(.editedAttributes, range: characterRange(forLines: range), changeInLength: 0)
+        }
+        endEditing()
+        for range in touched {
+            pendingInvalidation = characterRange(forLines: range)
+            flushPendingInvalidation()
+        }
     }
 
     @available(*, unavailable)
@@ -518,7 +549,9 @@ final class MarkdownTextStorage: NSTextStorage {
             guard let info = structure.info(forLine: line) else { continue }
             let lineRange = structure.index.range(ofLine: line)
             guard lineRange.length > 0 || lineRange.location < text.length else { continue }
+            lineAwaits = false
             style(line: line, info: info, range: lineRange, text: text)
+            if lineAwaits { backing.addAttribute(.mdAwaiting, value: true, range: lineRange) }
         }
     }
 
@@ -561,6 +594,7 @@ final class MarkdownTextStorage: NSTextStorage {
                 (Typesetter.shared.rendering(for: request), Typesetter.shared.error(for: request))
             }
             typesetError = error
+            if rendering == nil, error == nil { lineAwaits = true }
             if let revealedLines, revealedLines.overlaps(block.lines) {
                 revealed = true
                 if line == block.lines.upperBound {
@@ -807,7 +841,10 @@ final class MarkdownTextStorage: NSTextStorage {
         }
         guard let source, let url = imageURL(for: source) else { return nil }
         requestedImages.insert(url)
-        guard let image = MainActor.assumeIsolated({ ImageCache.shared.image(for: url) }) else { return nil }
+        guard let image = MainActor.assumeIsolated({ ImageCache.shared.image(for: url) }) else {
+            lineAwaits = true
+            return nil
+        }
 
         var size = image.size
         let maxWidth = max(80, maxImageWidth)
@@ -1186,6 +1223,7 @@ final class MarkdownTextStorage: NSTextStorage {
                         pendingInlineMath.append((absolute, rendering))
                         continue
                     }
+                    lineAwaits = true
                 }
                 backing.addAttributes([
                     .font: theme.mono,

@@ -47,6 +47,63 @@ struct RichEditingTests {
         #expect(storage.attribute(.mdImage, at: 0, effectiveRange: nil) == nil)
     }
 
+    /// Every edit the storage makes, by character range.
+    private final class EditRecorder: NSObject, NSTextStorageDelegate {
+        var ranges: [NSRange] = []
+
+        func textStorage(_ textStorage: NSTextStorage, didProcessEditing editedMask: NSTextStorageEditActions, range editedRange: NSRange, changeInLength delta: Int) {
+            ranges.append(editedRange)
+        }
+    }
+
+    @Test("An arriving image restyles its own line, wherever edits moved it")
+    func imageArrivalIsLocal() async throws {
+        let image = try writeImage(width: 200, height: 100)
+        let storage = MarkdownTextStorage(theme: .light)
+        storage.baseURL = image.deletingLastPathComponent().appendingPathComponent("doc.md")
+        let filler = String(repeating: "A paragraph of filler text.\n\n", count: 200)
+        storage.replaceCharacters(in: NSRange(location: 0, length: 0), with: "intro\n\n![alt](pic.png)\n\n" + filler)
+        // Lines arrive above the image before it does.
+        storage.replaceCharacters(in: NSRange(location: 0, length: 0), with: "new\nlines\n")
+        let line = (storage.string as NSString).range(of: "![alt]")
+        #expect(storage.attribute(.mdAwaiting, at: line.location, effectiveRange: nil) != nil)
+
+        let edits = EditRecorder()
+        storage.delegate = edits
+        for _ in 0..<50 where storage.attribute(.mdImage, at: line.location, effectiveRange: nil) == nil {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        #expect(storage.attribute(.mdImage, at: line.location, effectiveRange: nil) is InlineImage)
+        #expect(storage.attribute(.mdAwaiting, at: line.location, effectiveRange: nil) == nil)
+        #expect(!edits.ranges.isEmpty)
+        for range in edits.ranges {
+            #expect(range.length < 100, "restyled \(range) of \(storage.length)")
+        }
+    }
+
+    @Test("A new column width rescales images without restyling the rest")
+    func resizeIsLocal() async throws {
+        let image = try writeImage(width: 600, height: 300)
+        let storage = MarkdownTextStorage(theme: .light)
+        storage.baseURL = image.deletingLastPathComponent().appendingPathComponent("doc.md")
+        let filler = String(repeating: "A paragraph of filler text.\n\n", count: 200)
+        storage.replaceCharacters(in: NSRange(location: 0, length: 0), with: filler + "![alt](pic.png)\n")
+        let line = (storage.string as NSString).range(of: "![alt]")
+        for _ in 0..<50 where storage.attribute(.mdImage, at: line.location, effectiveRange: nil) == nil {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+
+        let edits = EditRecorder()
+        storage.delegate = edits
+        storage.maxImageWidth = 300
+        let inline = try #require(storage.attribute(.mdImage, at: line.location, effectiveRange: nil) as? InlineImage)
+        #expect(inline.size == CGSize(width: 300, height: 150))
+        #expect(edits.ranges.count == 1)
+        for range in edits.ranges {
+            #expect(range.location >= line.location - 1 && range.length < 100, "restyled \(range) of \(storage.length)")
+        }
+    }
+
     @Test("An image wrapped in a link still shows as an image")
     func linkedImage() async throws {
         let image = try writeImage(width: 120, height: 30)
