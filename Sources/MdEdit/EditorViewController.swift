@@ -53,14 +53,20 @@ final class EditorViewController: NSViewController {
         documentUndoManager = undoManager
         textContainer = NSTextContainer(size: CGSize(width: 0, height: CGFloat.greatestFiniteMagnitude))
 
-        storage.addLayoutManager(layoutManager)
         layoutManager.addTextContainer(textContainer)
         textContainer.widthTracksTextView = true
         textContainer.heightTracksTextView = false
 
         textView = MarkdownTextView(frame: .zero, textContainer: textContainer)
         super.init(nibName: nil, bundle: nil)
+        // Setting up a text view asks it to redraw, and a redraw lays out what
+        // it shows. So it goes in its scroll view first (outside one, all of
+        // a view sized to fit the text shows) and meets the document last.
+        // Otherwise the whole document was laid out here, 9.6 s at 4.5 MB,
+        // for a view not yet on screen.
+        scrollView.documentView = textView
         configureTextView()
+        storage.addLayoutManager(layoutManager)
         input = MarkdownInputHandler(storage: textStorage)
         activeLine = ActiveLineController(storage: textStorage, textView: textView)
         textView.delegate = self
@@ -79,7 +85,6 @@ final class EditorViewController: NSViewController {
     required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
 
     override func loadView() {
-        scrollView.documentView = textView
         scrollView.hasVerticalScroller = true
         scrollView.hasHorizontalScroller = false
         scrollView.drawsBackground = true
@@ -193,8 +198,11 @@ final class EditorViewController: NSViewController {
         scrollView.backgroundColor = theme.canvas
         textView.backgroundColor = theme.canvas
         textView.insertionPointColor = theme.accent
-        textView.font = theme.body
-        textView.textColor = theme.text
+        // What typing starts with, before the storage styles it. Not the text
+        // view's font and text colour: in a plain-text view those rewrite
+        // every run of the document, wiping the styling (and taking half a
+        // minute at 4.5 MB).
+        textView.typingAttributes = [.font: theme.body, .foregroundColor: theme.text]
         storage.theme = theme
         textView.selectedTextAttributes = [
             .backgroundColor: theme.accent.withAlphaComponent(0.25),

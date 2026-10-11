@@ -146,6 +146,21 @@ struct PerformanceTests {
         #expect(restyle < 1.5 * load, "load \(load) ms, restyle \(restyle) ms")
     }
 
+    /// Configuring the text view once it showed the document laid all of
+    /// it out, for a view not on screen yet: 9.6 s at 4.5 MB.
+    @Test("Opening an editor lays out only what it shows")
+    func editorSetupIsLazy() {
+        let document = Document(text: Self.document(lines: 30_000), theme: .light)
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 900, height: 700), styleMask: [.titled], backing: .buffered, defer: true)
+        let setup = Self.milliseconds {
+            window.contentViewController = EditorViewController(textStorage: document.storage, undoManager: document.undoManager)
+            window.displayIfNeeded()
+        }
+        print("benchmark editor setup", String(format: "%.0f ms", setup))
+        #expect(setup < 500, "\(setup) ms")
+        withExtendedLifetime(window) {}
+    }
+
     @Test("5 MB, 100k lines", .enabled(if: ProcessInfo.processInfo.environment["MDEDIT_BENCHMARKS"] == "1"))
     func largeFile() {
         let timings = Self.measure(lines: 100_000)

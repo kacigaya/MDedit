@@ -99,4 +99,54 @@ struct MarkdownTextStorageTests {
         storage.theme = .dark
         #expect(edits == 1)
     }
+
+    @Test("Moving a revealed range restyles to the same result as starting there")
+    func revealChangesMatchFreshStyling() {
+        let text = PerformanceTests.document(lines: 300) + "Term\n: definition\n\n$$\nx^2\n$$\n"
+        let moved = storage(text)
+        let last = moved.structure.lineCount - 1
+        // Grow, shrink, jump, overlap and clear, as selections do.
+        let steps: [ClosedRange<Int>?] = [5...5, 5...9, 5...40, 30...60, 2...3, 200...last, last...last, 150...250, nil, 0...last, 7...7]
+        for step in steps {
+            moved.revealedLines = step
+            let fresh = storage(text)
+            fresh.revealedLines = step
+            let whole = NSRange(location: 0, length: fresh.length)
+            #expect(moved.attributedSubstring(from: whole).isEqual(to: fresh.attributedSubstring(from: whole)), "after \(String(describing: step))")
+        }
+    }
+
+    @Test("Every entry of a long definition list is styled as one, and long prose is not")
+    func longDefinitionList() throws {
+        let entries = (0..<200).map { "Term \($0)\n: Its definition." }.joined(separator: "\n")
+        let prose = (0..<200).map { "Line \($0) of prose, wrapped by hand." }.joined(separator: "\n")
+        let storage = storage(entries + "\n\n" + prose + "\n")
+        let text = storage.string as NSString
+        for term in ["Term 0", "Term 199"] {
+            let font = try #require(storage.attribute(.font, at: text.range(of: term).location, effectiveRange: nil) as? NSFont)
+            #expect(font.fontDescriptor.symbolicTraits.contains(.bold), "\(term)")
+        }
+        let lastMarker = text.range(of: ": Its", options: .backwards).location
+        #expect(storage.attribute(.mdConcealed, at: lastMarker, effectiveRange: nil) != nil)
+        let line = try #require(storage.attribute(.font, at: text.range(of: "Line 150").location, effectiveRange: nil) as? NSFont)
+        #expect(!line.fontDescriptor.symbolicTraits.contains(.bold))
+    }
+
+    @Test("Putting a document in an editor keeps its styling")
+    func editorKeepsStyling() throws {
+        let document = Document(text: "Intro.\n\nSome **bold** and `code`.\n", theme: .light)
+        let storage = document.storage
+        let whole = NSRange(location: 0, length: storage.length)
+        let styled = storage.attributedSubstring(from: whole)
+        let editor = EditorViewController(textStorage: storage, undoManager: document.undoManager)
+        _ = editor.view
+        // The caret sits on the first line, which shows as written; the rest is as styled.
+        let rest = NSRange(location: 7, length: storage.length - 7)
+        #expect(storage.attributedSubstring(from: rest).isEqual(to: styled.attributedSubstring(from: rest)))
+        let bold = try #require(storage.attribute(.font, at: (storage.string as NSString).range(of: "bold").location, effectiveRange: nil) as? NSFont)
+        #expect(bold.fontDescriptor.symbolicTraits.contains(.bold))
+        let code = try #require(storage.attribute(.font, at: (storage.string as NSString).range(of: "code").location, effectiveRange: nil) as? NSFont)
+        #expect(code.isFixedPitch)
+        _ = whole
+    }
 }

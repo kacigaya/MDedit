@@ -18,6 +18,8 @@ final class ActiveLineController {
         didSet { selectionChanged() }
     }
 
+    static let maxRevealedLines = 100
+
     init(storage: MarkdownTextStorage, textView: NSTextView) {
         self.storage = storage
         self.textView = textView
@@ -35,7 +37,10 @@ final class ActiveLineController {
         for line in [firstLine, lastLine] where storage.isHidden(line: line) {
             storage.reveal(line: line)
         }
-        storage.revealedLines = firstLine...lastLine
+        // Past a screenful, a selection is for copying, moving or deleting,
+        // not for editing its syntax: only the line it ends on shows as
+        // written, instead of every line in it restyling and reflowing.
+        storage.revealedLines = lastLine - firstLine <= Self.maxRevealedLines ? firstLine...lastLine : lastLine...lastLine
 
         if let manager = textView.layoutManager as? MarkdownLayoutManager {
             let old = manager.focusRange

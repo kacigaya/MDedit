@@ -522,8 +522,14 @@ final class MarkdownTextStorage: NSTextStorage {
 
     /// Reveals the newly active block and re-hides the one left behind.
     private func restyleRevealChange(from old: ClosedRange<Int>?, to new: ClosedRange<Int>?) {
+        // Only lines that were revealed and are not, or the other way round:
+        // a selection growing by a line restyles that line, not all of it.
+        func lines(_ range: ClosedRange<Int>?) -> IndexSet {
+            range.flatMap(clampedLineRange).map { IndexSet(integersIn: $0) } ?? IndexSet()
+        }
+        let changed = lines(old).symmetricDifference(lines(new))
         // A block that shows as an image opens and closes as a whole.
-        let touched = [old, new].compactMap { $0 }.compactMap(clampedLineRange).map { self.expandedToDefinitionGaps(self.expandedToTypesetBlocks($0)) }
+        let touched = changed.rangeView.map { self.expandedToDefinitionGaps(self.expandedToTypesetBlocks($0.lowerBound...($0.upperBound - 1))) }
         guard !touched.isEmpty else { return }
 
         beginEditing()
@@ -544,6 +550,8 @@ final class MarkdownTextStorage: NSTextStorage {
         let lower = max(0, lineRange.lowerBound)
         let upper = min(lineRange.upperBound, structure.lineCount - 1)
         guard lower <= upper else { return }
+        definitionLookup = nil
+        defer { definitionLookup = nil }
 
         for line in lower...upper {
             guard let info = structure.info(forLine: line) else { continue }
@@ -911,24 +919,31 @@ final class MarkdownTextStorage: NSTextStorage {
             guard let next = structure.info(forLine: other) else { return false }
             return next.kind == .paragraph && next.quoteDepth == info.quoteDepth && next.listDepth == info.listDepth
         }
-        // Only a paragraph with a `: ` line in it can be one; most have none.
-        var first = line, last = line
-        while first > 0, continues(first - 1) { first -= 1 }
-        while continues(last + 1) { last += 1 }
-        guard first < last else { return nil }
-        var lines: [String] = []
-        var isDefinition = false
-        for paragraphLine in first...last {
+        func body(_ paragraphLine: Int) -> [UInt16]? {
             guard let lineInfo = structure.info(forLine: paragraphLine) else { return nil }
             let characters = structure.characters(of: text, line: paragraphLine)
-            let start = min(lineInfo.contentStart, characters.count)
-            let body = Array(characters[start...])
-            if paragraphLine == line { isDefinition = definitionStart(body) != nil }
-            lines.append(String(utf16CodeUnits: body, count: body.count))
+            return Array(characters[min(lineInfo.contentStart, characters.count)...])
         }
-        guard DefinitionList(lines: lines) != nil else { return nil }
-        return isDefinition ? .definition : .term
+        // The paragraph is looked at once per styling pass, not once a line:
+        // a long hard-wrapped one was quadratic.
+        if definitionLookup?.lines.contains(line) != true {
+            var first = line, last = line
+            while first > 0, continues(first - 1) { first -= 1 }
+            while continues(last + 1) { last += 1 }
+            var lines: [String] = []
+            for paragraphLine in first...last where first < last {
+                guard let characters = body(paragraphLine) else { break }
+                lines.append(String(utf16CodeUnits: characters, count: characters.count))
+            }
+            definitionLookup = (first...last, first < last && lines.count == last - first + 1 && DefinitionList(lines: lines) != nil)
+        }
+        guard definitionLookup?.isList == true, let characters = body(line) else { return nil }
+        return definitionStart(characters) != nil ? .definition : .term
     }
+
+    /// The paragraph found for a run of lines while styling, and whether it
+    /// is a definition list.
+    private var definitionLookup: (lines: ClosedRange<Int>, isList: Bool)?
 
     // MARK: - Typeset math and diagrams
 
