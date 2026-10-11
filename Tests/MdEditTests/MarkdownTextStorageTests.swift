@@ -74,4 +74,29 @@ struct MarkdownTextStorageTests {
         storage.revealedLines = 0...0
         #expect(storage.string == "```bash")
     }
+
+    @Test("Restyling for a new theme matches styling from scratch")
+    func restyleMatchesFreshStyling() {
+        let text = PerformanceTests.document(lines: 500)
+        let restyled = MarkdownTextStorage(theme: .dark)
+        restyled.replaceCharacters(in: NSRange(location: 0, length: 0), with: text)
+        restyled.theme = .light
+        let fresh = storage(text)
+        let whole = NSRange(location: 0, length: fresh.length)
+        #expect(restyled.attributedSubstring(from: whole).isEqual(to: fresh.attributedSubstring(from: whole)))
+    }
+
+    @Test("Handing the editor the theme it already has does not restyle")
+    func sameThemeIsFree() {
+        let storage = storage("# Title\n\nSome **bold** text.\n")
+        var edits = 0
+        let observer = NotificationCenter.default.addObserver(
+            forName: NSTextStorage.didProcessEditingNotification, object: storage, queue: nil
+        ) { _ in edits += 1 }
+        defer { NotificationCenter.default.removeObserver(observer) }
+        storage.theme = .light
+        #expect(edits == 0)
+        storage.theme = .dark
+        #expect(edits == 1)
+    }
 }

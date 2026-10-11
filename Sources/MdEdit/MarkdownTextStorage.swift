@@ -232,6 +232,9 @@ final class MarkdownTextStorage: NSTextStorage {
 
     var theme: Theme {
         didSet {
+            // Every editor is handed the theme again on open, on appearance
+            // changes and on any setting; restyle only when it differs.
+            guard theme != oldValue else { return }
             styles.removeAll()
             restyleAll()
         }
@@ -449,6 +452,11 @@ final class MarkdownTextStorage: NSTextStorage {
     func restyleAll() {
         guard structure.lineCount > 0 else { return }
         beginEditing()
+        // One run first, so each line's styles split the tail of the run array
+        // instead of reshaping it in the middle: Foundation keeps runs in a flat
+        // array, and restyling over existing runs memmoves the rest of the
+        // document per line (42 s rather than 3 s at 4.5 MB).
+        backing.setAttributes([.font: theme.body], range: NSRange(location: 0, length: backing.length))
         applyStyles(lineRange: 0...(structure.lineCount - 1))
         edited(.editedAttributes, range: NSRange(location: 0, length: backing.length), changeInLength: 0)
         endEditing()

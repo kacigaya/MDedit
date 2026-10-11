@@ -93,7 +93,7 @@ struct SyntaxPalette: Equatable {
 ///
 /// The canvas is deliberately opaque: glass belongs to the chrome floating above
 /// it, never behind body text.
-struct Theme {
+struct Theme: Equatable {
     var canvas: NSColor
     var text: NSColor
     var heading: NSColor

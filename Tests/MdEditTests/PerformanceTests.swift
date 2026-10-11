@@ -54,6 +54,7 @@ struct PerformanceTests {
     struct Timings: CustomStringConvertible {
         var bytes = 0
         var load = 0.0
+        var restyle = 0.0
         var keystroke = 0.0
         var newline = 0.0
         var fence = 0.0
@@ -61,8 +62,8 @@ struct PerformanceTests {
         var drawScreen = 0.0
 
         var description: String {
-            String(format: "%.1f MB: load %.0f ms, keystroke %.2f ms, return %.2f ms, open fence %.0f ms, lay out a screen %.1f ms, draw a screen %.1f ms",
-                   Double(bytes) / 1_000_000, load, keystroke, newline, fence, layoutScreen, drawScreen)
+            String(format: "%.1f MB: load %.0f ms, restyle %.0f ms, keystroke %.2f ms, return %.2f ms, open fence %.0f ms, lay out a screen %.1f ms, draw a screen %.1f ms",
+                   Double(bytes) / 1_000_000, load, restyle, keystroke, newline, fence, layoutScreen, drawScreen)
         }
     }
 
@@ -74,6 +75,9 @@ struct PerformanceTests {
         timings.load = milliseconds {
             storage.replaceCharacters(in: NSRange(location: 0, length: 0), with: text)
         }
+        // A theme change restyles every line over runs that already exist.
+        timings.restyle = milliseconds { storage.theme = .dark }
+        storage.theme = .light
 
         // A keystroke in a paragraph in the middle, with the caret's line revealed.
         let middle = (storage.string as NSString).range(of: "Some prose", options: [], range: NSRange(location: storage.length / 2, length: storage.length / 2))
@@ -125,6 +129,21 @@ struct PerformanceTests {
         #expect(timings.keystroke < 25, "\(timings)")
         #expect(timings.newline < 50, "\(timings)")
         #expect(timings.drawScreen < 250, "\(timings)")
+    }
+
+    /// Opening a document, switching appearance and changing any setting all
+    /// restyle every line. Done over the runs already there, that once grew
+    /// with the square of the document: 42 s rather than 3 s at 4.5 MB.
+    @Test("Restyling everything costs about what loading does")
+    func restyleIsLinear() {
+        let storage = MarkdownTextStorage(theme: .light)
+        let text = Self.document(lines: 30_000)
+        let load = Self.milliseconds {
+            storage.replaceCharacters(in: NSRange(location: 0, length: 0), with: text)
+        }
+        let restyle = Self.milliseconds { storage.theme = .dark }
+        print("benchmark restyle", String(format: "load %.0f ms, restyle %.0f ms", load, restyle))
+        #expect(restyle < 1.5 * load, "load \(load) ms, restyle \(restyle) ms")
     }
 
     @Test("5 MB, 100k lines", .enabled(if: ProcessInfo.processInfo.environment["MDEDIT_BENCHMARKS"] == "1"))
