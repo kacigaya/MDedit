@@ -1,4 +1,5 @@
 import AppKit
+import ImageIO
 
 /// Loads images referenced by documents, once each, off the main thread.
 ///
@@ -11,17 +12,28 @@ final class ImageCache {
 
     private enum Entry {
         case loading
-        case loaded(NSImage)
         case failed
     }
 
+    /// Images on their way or that could not be read.
     private var entries: [URL: Entry] = [:]
+    /// Loaded images, by decoded size: those no open document still shows
+    /// can go when memory is short. A document showing one keeps it alive.
+    private let loaded: NSCache<NSURL, NSImage> = {
+        let cache = NSCache<NSURL, NSImage>()
+        cache.totalCostLimit = 256 * 1024 * 1024
+        return cache
+    }()
+
+    /// Wider than the widest column at 2x: more pixels are never drawn, and
+    /// a photo straight off a camera would be 48 MB decoded and scaled down
+    /// again on every redraw.
+    nonisolated static let maxPixelWidth = 2800
 
     /// The image if it is ready; otherwise starts loading it and returns nil.
     func image(for url: URL) -> NSImage? {
+        if let image = loaded.object(forKey: url as NSURL) { return image }
         switch entries[url] {
-        case let .loaded(image)?:
-            return image
         case .loading?, .failed?:
             return nil
         case nil:
@@ -44,6 +56,7 @@ final class ImageCache {
     /// Forgets an image so the next request reloads it, for files edited on disk.
     func invalidate(_ url: URL) {
         entries[url] = nil
+        loaded.removeObject(forKey: url as NSURL)
     }
 
     private func finish(_ url: URL, image: NSImage?) {
@@ -51,7 +64,9 @@ final class ImageCache {
             entries[url] = .failed
             return
         }
-        entries[url] = .loaded(image)
+        entries[url] = nil
+        let cost = image.representations.reduce(0) { $0 + $1.pixelsWide * $1.pixelsHigh * 4 }
+        loaded.setObject(image, forKey: url as NSURL, cost: cost)
         NotificationCenter.default.post(name: Self.didLoad, object: url)
     }
 
@@ -62,8 +77,39 @@ final class ImageCache {
         } else {
             data = try? await URLSession.shared.data(from: url).0
         }
-        guard let data, let image = NSImage(data: data), image.size.width > 0, image.size.height > 0 else { return nil }
-        return image
+        guard let data else { return nil }
+        return decoded(data) ?? NSImage(data: data).flatMap { $0.size.width > 0 && $0.size.height > 0 ? $0 : nil }
+    }
+
+    /// A bitmap decoded here, off the main thread, rather than on its first
+    /// draw, and no wider than `maxPixelWidth`. It keeps the size the image
+    /// would have had: its pixels at its resolution, upright. Nil for what
+    /// ImageIO does not read as a bitmap, such as PDF and SVG.
+    nonisolated static func decoded(_ data: Data) -> NSImage? {
+        guard let source = CGImageSourceCreateWithData(data as CFData, nil),
+              let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
+              var width = properties[kCGImagePropertyPixelWidth] as? Int,
+              var height = properties[kCGImagePropertyPixelHeight] as? Int,
+              width > 0, height > 0
+        else { return nil }
+        // Orientations 5 to 8 turn the picture on its side.
+        if let orientation = properties[kCGImagePropertyOrientation] as? Int, orientation >= 5 { swap(&width, &height) }
+        let longest = max(width, height) * min(maxPixelWidth, width) / width
+        guard let image = CGImageSourceCreateThumbnailAtIndex(source, 0, [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceShouldCacheImmediately: true,
+            kCGImageSourceThumbnailMaxPixelSize: longest,
+        ] as CFDictionary) else { return nil }
+        let dpi = (properties[kCGImagePropertyDPIWidth] as? Double).flatMap { $0 > 0 ? $0 : nil } ?? 72
+        let size = NSSize(width: Double(width) * 72 / dpi, height: Double(height) * 72 / dpi)
+        // A bitmap rep, which counts the pixels it has; NSImage(cgImage:)
+        // reports pixels for the screen it might be drawn on instead.
+        let rep = NSBitmapImageRep(cgImage: image)
+        rep.size = size
+        let result = NSImage(size: size)
+        result.addRepresentation(rep)
+        return result
     }
 }
 
