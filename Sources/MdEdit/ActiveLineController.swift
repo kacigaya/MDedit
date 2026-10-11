@@ -38,9 +38,20 @@ final class ActiveLineController {
         storage.revealedLines = firstLine...lastLine
 
         if let manager = textView.layoutManager as? MarkdownLayoutManager {
-            manager.focusRange = focusMode ? storage.characterRange(forLines: firstLine...lastLine) : nil
-            if focusMode {
+            let old = manager.focusRange
+            let new = focusMode ? storage.characterRange(forLines: firstLine...lastLine) : nil
+            manager.focusRange = new
+            switch (old, new) {
+            case let (old?, new?) where old != new:
+                // Only the lines leaving and entering focus change how they are dimmed.
+                for range in [old, new] {
+                    let location = min(range.location, storage.length)
+                    manager.invalidateDisplay(forCharacterRange: NSRange(location: location, length: min(range.length, storage.length - location)))
+                }
+            case (nil, _?), (_?, nil):
                 manager.invalidateDisplay(forCharacterRange: NSRange(location: 0, length: storage.length))
+            default:
+                break
             }
         }
 

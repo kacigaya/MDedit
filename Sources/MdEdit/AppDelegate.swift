@@ -165,7 +165,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         hasRestored = true
         // Snapshots were keyed by the old documents' ids; rewrite them under the new ones.
         RecoveryStore.standard.removeAll()
-        controllers.forEach { $0.writeRecoverySnapshots() }
+        controllers.forEach { $0.writeRecoverySnapshots(rewriting: true) }
         saveSession()
     }
 

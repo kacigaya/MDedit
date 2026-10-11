@@ -8,7 +8,15 @@ import UniformTypeIdentifiers
 final class PreviewProvider: QLPreviewProvider, QLPreviewingController {
     func providePreview(for request: QLFilePreviewRequest) async throws -> QLPreviewReply {
         let url = request.fileURL
-        let markdown = try Self.text(of: Data(contentsOf: url))
+        let data = try Data(contentsOf: url, options: .mappedIfSafe)
+        var markdown = try Self.text(of: Self.leadingLines(of: data, upTo: Self.limit))
+        if data.count > Self.limit {
+            // An extension has little memory and Finder waits on it: a huge
+            // file previews its beginning, and says so.
+            let shown = ByteCountFormatter.string(fromByteCount: Int64(Self.limit), countStyle: .file)
+            let total = ByteCountFormatter.string(fromByteCount: Int64(data.count), countStyle: .file)
+            markdown += "\n\n---\n\n*" + String(localized: "Preview of the first \(shown) of \(total).") + "*\n"
+        }
         let html = HTMLRenderer(baseURL: url).renderDocument(
             markdown: markdown,
             title: url.deletingPathExtension().lastPathComponent,
@@ -18,6 +26,25 @@ final class PreviewProvider: QLPreviewProvider, QLPreviewingController {
             reply.stringEncoding = .utf8
             return Data(html.utf8)
         }
+    }
+
+    /// The most a preview renders.
+    static let limit = 1_000_000
+
+    /// Whole lines from the start, at most `limit` bytes. A cut after a line
+    /// break never splits a character in UTF-8 or a single-byte encoding;
+    /// UTF-16, whose line breaks are two bytes, is cut at a code unit.
+    static func leadingLines(of data: Data, upTo limit: Int) -> Data {
+        guard data.count > limit else { return data }
+        if data.starts(with: [0xFF, 0xFE]) || data.starts(with: [0xFE, 0xFF]) { return data.prefix(limit & ~1) }
+        let head = data.prefix(limit)
+        if let newline = head.lastIndex(of: 0x0A) { return data[data.startIndex...newline] }
+        // One enormous line: drop a UTF-8 character the cut runs through.
+        var lead = head.endIndex
+        while lead > head.startIndex, head[lead - 1] & 0xC0 == 0x80 { lead -= 1 }
+        guard lead > head.startIndex, head[lead - 1] >= 0xC0 else { return head }
+        let length = head[lead - 1] >= 0xF0 ? 4 : head[lead - 1] >= 0xE0 ? 3 : 2
+        return head.endIndex - (lead - 1) == length ? head : data[data.startIndex..<(lead - 1)]
     }
 
     /// UTF-8 when it is, else whatever encoding Foundation recognises.

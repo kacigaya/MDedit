@@ -239,8 +239,15 @@ enum Exporter {
     // MARK: - Rendering
 
     /// KaTeX and Mermaid, when the app bundle carries them
-    /// (`Scripts/fetch-vendor.sh` before `Scripts/make-app.sh`).
+    /// (`Scripts/fetch-vendor.sh` before `Scripts/make-app.sh`). Several MB
+    /// with the fonts inlined, so the app's own are read once.
     static func bundledScripts(in bundle: Bundle = .main) -> HTMLRenderer.ScriptAssets? {
+        bundle == .main ? mainBundleScripts : readScripts(in: bundle)
+    }
+
+    private static let mainBundleScripts = readScripts(in: .main)
+
+    private static func readScripts(in bundle: Bundle) -> HTMLRenderer.ScriptAssets? {
         guard let vendor = bundle.resourceURL?.appendingPathComponent("vendor", isDirectory: true) else { return nil }
         func read(_ path: String) -> String? {
             try? String(contentsOf: vendor.appendingPathComponent(path), encoding: .utf8)

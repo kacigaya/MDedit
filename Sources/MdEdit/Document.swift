@@ -175,6 +175,15 @@ final class Document {
         recordVersion(contents)
     }
 
+    /// What the last recovery snapshot was written from, so an unchanged
+    /// document is not written again; nil when it has none.
+    struct SnapshotState: Equatable {
+        var generation: Int
+        var url: URL?
+    }
+
+    var snapshotState: SnapshotState?
+
     /// Where earlier versions of the file are kept.
     var history = VersionHistory.standard
 

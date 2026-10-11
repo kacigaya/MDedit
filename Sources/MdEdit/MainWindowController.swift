@@ -790,16 +790,22 @@ final class MainWindowController: NSWindowController {
         DispatchQueue.main.asyncAfter(deadline: .now() + 2, execute: work)
     }
 
-    /// Writes a snapshot for every unsaved document and drops the rest, then
-    /// records the open tabs so a crash can be recovered from too.
-    func writeRecoverySnapshots() {
+    /// Writes a snapshot for every unsaved document changed since its last
+    /// one and drops those of saved documents, then records the open tabs so
+    /// a crash can be recovered from too. `rewriting` writes them all again,
+    /// after the snapshots on disk were cleared.
+    func writeRecoverySnapshots(rewriting: Bool = false) {
         pendingSnapshot?.cancel()
         pendingSnapshot = nil
         for document in documents {
+            let state = Document.SnapshotState(generation: document.storage.editGeneration, url: document.url)
             if document.isDirty {
+                guard rewriting || document.snapshotState != state else { continue }
                 try? recovery.write(.init(id: document.id, url: document.url, text: document.text))
-            } else {
+                document.snapshotState = state
+            } else if rewriting || document.snapshotState != nil {
                 recovery.remove(id: document.id)
+                document.snapshotState = nil
             }
         }
         onSessionChange?()

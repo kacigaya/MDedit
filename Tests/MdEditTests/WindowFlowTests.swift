@@ -145,4 +145,32 @@ struct WindowFlowTests {
         #expect(!moved)
         #expect(controller.documents.count == 1)
     }
+
+    @Test("Recovery writes only documents changed since their last snapshot")
+    func recoveryWritesChanges() throws {
+        let controller = makeWindow()
+        let document = try openEdited("recover.md", in: controller)
+        let snapshot = scratch.appendingPathComponent("Recovery/\(document.id.uuidString).json")
+        func recorded() -> String? { controller.recovery.snapshots().first { $0.id == document.id }?.text }
+
+        controller.writeRecoverySnapshots()
+        #expect(recorded() == "edited saved\n")
+
+        // Unchanged since: not written again, so a snapshot removed behind its back stays gone.
+        try FileManager.default.removeItem(at: snapshot)
+        controller.writeRecoverySnapshots()
+        #expect(recorded() == nil)
+        // Unless every snapshot is being rewritten, after the store was cleared.
+        controller.writeRecoverySnapshots(rewriting: true)
+        #expect(recorded() == "edited saved\n")
+
+        document.storage.replaceCharacters(in: NSRange(location: 0, length: 0), with: "more ")
+        controller.writeRecoverySnapshots()
+        #expect(recorded() == "more edited saved\n")
+
+        // Saved: nothing left to recover.
+        controller.save(document: document)
+        #expect(recorded() == nil)
+        #expect(!FileManager.default.fileExists(atPath: snapshot.path))
+    }
 }
