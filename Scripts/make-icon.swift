@@ -6,46 +6,92 @@
 import AppKit
 import Foundation
 
-/// The markdown mark — a rounded rectangle holding "M" and a down arrow — on a
-/// squircle the shade of the editor's accent.
+/// The app icon: a page with a heading and text lines, crossed by a pencil, on a
+/// teal-to-blue squircle. Mirrors docs/logos/logo-3-page-pencil.svg, drawn in its
+/// 512-unit coordinate space (y down) and scaled onto a 1024 canvas with the
+/// usual macOS breathing room.
 func drawIcon(size: CGFloat) -> NSImage {
-    let image = NSImage(size: NSSize(width: size, height: size))
-    image.lockFocus()
-    defer { image.unlockFocus() }
+    // Drawn into an sRGB bitmap so the gradient keeps its colors instead of
+    // being converted through the display profile.
+    let pixels = Int(size)
+    guard let rep = NSBitmapImageRep(
+        bitmapDataPlanes: nil, pixelsWide: pixels, pixelsHigh: pixels, bitsPerSample: 8,
+        samplesPerPixel: 4, hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB,
+        bytesPerRow: 0, bitsPerPixel: 0
+    ), let context = NSGraphicsContext(bitmapImageRep: rep) else { return NSImage() }
+    NSGraphicsContext.saveGraphicsState()
+    NSGraphicsContext.current = context
+    defer {
+        NSGraphicsContext.restoreGraphicsState()
+    }
 
     let unit = size / 1024
-    let bounds = NSRect(x: 0, y: 0, width: size, height: size)
+    let scale = 824 * unit / 512
+    let flip = NSAffineTransform()
+    flip.translateX(by: 100 * unit, yBy: 924 * unit)
+    flip.scaleX(by: scale, yBy: -scale)
+    flip.concat()
 
-    // macOS icons sit inside a squircle with a little breathing room.
-    let plate = bounds.insetBy(dx: 100 * unit, dy: 100 * unit)
-    let squircle = NSBezierPath(roundedRect: plate, xRadius: 185 * unit, yRadius: 185 * unit)
+    func rounded(_ x: CGFloat, _ y: CGFloat, _ w: CGFloat, _ h: CGFloat, _ r: CGFloat) -> NSBezierPath {
+        NSBezierPath(roundedRect: NSRect(x: x, y: y, width: w, height: h), xRadius: r, yRadius: r)
+    }
+    func hex(_ value: Int) -> NSColor {
+        NSColor(
+            srgbRed: CGFloat((value >> 16) & 0xFF) / 255,
+            green: CGFloat((value >> 8) & 0xFF) / 255,
+            blue: CGFloat(value & 0xFF) / 255,
+            alpha: 1
+        )
+    }
 
-    NSGradient(
-        colors: [
-            NSColor(calibratedRed: 0.36, green: 0.52, blue: 0.96, alpha: 1),
-            NSColor(calibratedRed: 0.20, green: 0.32, blue: 0.80, alpha: 1),
-        ]
-    )?.draw(in: squircle, angle: -90)
-
-    // A soft highlight along the top edge, the way glass catches light.
+    let plate = rounded(0, 0, 512, 512, 115)
     NSGraphicsContext.saveGraphicsState()
-    squircle.addClip()
-    NSGradient(
-        colors: [
-            NSColor(white: 1, alpha: 0.30),
-            NSColor(white: 1, alpha: 0.0),
-        ]
-    )?.draw(in: NSRect(x: plate.minX, y: plate.midY, width: plate.width, height: plate.height / 2), angle: -90)
+    plate.addClip()
+    NSGradient(starting: hex(0x14B8A6), ending: hex(0x0369A1))?
+        .draw(from: NSPoint(x: 0, y: 0), to: NSPoint(x: 512, y: 512), options: [])
     NSGraphicsContext.restoreGraphicsState()
 
-    // The mark: a rounded outline with M and a descending arrow.
-    let markRect = NSRect(
-        x: plate.minX + 130 * unit,
-        y: plate.minY + 230 * unit,
-        width: plate.width - 260 * unit,
-        height: plate.height - 460 * unit
-    )
-    drawMark(in: markRect, unit: unit, color: .white)
+    NSColor.white.setFill()
+    rounded(120, 86, 250, 330, 30).fill()
+    hex(0x0F766E).setFill()
+    rounded(160, 136, 110, 30, 15).fill()
+    hex(0xCBD5E1).setFill()
+    for (y, w) in [(196, 170), (232, 150), (268, 170), (304, 90)] as [(CGFloat, CGFloat)] {
+        rounded(160, y, w, 16, 8).fill()
+    }
+
+    // The pencil, drawn along +x and then turned to point down-left.
+    let pencil = NSAffineTransform()
+    pencil.translateX(by: 410, yBy: 290)
+    pencil.rotate(byDegrees: 135)
+    pencil.concat()
+
+    func shape(_ path: NSBezierPath, fill: NSColor) {
+        fill.setFill()
+        path.fill()
+        NSColor.white.setStroke()
+        path.lineWidth = 12
+        path.lineJoinStyle = .round
+        path.stroke()
+    }
+    shape(rounded(-34, -24, 34, 48, 8), fill: hex(0xFDA4AF))
+    shape(NSBezierPath(rect: NSRect(x: 0, y: -24, width: 150, height: 48)), fill: hex(0xFBBF24))
+    let tip = NSBezierPath()
+    tip.move(to: NSPoint(x: 150, y: -24))
+    tip.line(to: NSPoint(x: 205, y: 0))
+    tip.line(to: NSPoint(x: 150, y: 24))
+    tip.close()
+    shape(tip, fill: hex(0xFDE68A))
+    let lead = NSBezierPath()
+    lead.move(to: NSPoint(x: 190, y: -7))
+    lead.line(to: NSPoint(x: 205, y: 0))
+    lead.line(to: NSPoint(x: 190, y: 7))
+    lead.close()
+    hex(0x334155).setFill()
+    lead.fill()
+
+    let image = NSImage(size: NSSize(width: size, height: size))
+    image.addRepresentation(rep)
     return image
 }
 
