@@ -8,7 +8,12 @@ import AppKit
 @MainActor
 enum UpdateChecker {
     static let latestRelease = URL(string: "https://api.github.com/repos/msk-mdi/MDedit/releases/latest")!
+    static let releasesPage = URL(string: "https://github.com/msk-mdi/MDedit/releases")!
     private static let lastCheckKey = "lastUpdateCheck"
+
+    nonisolated static func isReleasePage(_ url: URL) -> Bool {
+        url.scheme == "https" && url.host?.lowercased() == "github.com"
+    }
 
     struct Release: Decodable, Equatable {
         var tagName: String
@@ -81,7 +86,9 @@ enum UpdateChecker {
         alert.addButton(withTitle: String(localized: "Open Release Page"))
         alert.addButton(withTitle: String(localized: "Later"))
         if alert.runModal() == .alertFirstButtonReturn {
-            NSWorkspace.shared.open(release.htmlURL)
+            // Only ever a page on GitHub, whatever the response says.
+            let page = isReleasePage(release.htmlURL) ? release.htmlURL : releasesPage
+            NSWorkspace.shared.open(page)
         }
     }
 

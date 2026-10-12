@@ -578,14 +578,19 @@ final class MainWindowController: NSWindowController {
     // MARK: - Links
 
     /// Follows a link: web addresses go to the browser, `#anchors` jump to a
-    /// heading, markdown files open in a tab, anything else in its own app.
+    /// heading, markdown files open in a tab, anything else in its own app —
+    /// except other URL schemes, which ask first, and programs and scripts,
+    /// which are shown in Finder rather than run (`LinkPolicy`).
     func openLink(_ destination: String, from document: Document) {
         if destination.hasPrefix("#") {
             jumpToHeading(slug: String(destination.dropFirst()), in: document)
             return
         }
-        if let url = URL(string: destination), let scheme = url.scheme, scheme != "file" {
-            NSWorkspace.shared.open(url)
+        if let url = URL(string: destination), let scheme = url.scheme, scheme.lowercased() != "file" {
+            switch LinkPolicy.action(forScheme: scheme) {
+            case .open: NSWorkspace.shared.open(url)
+            case .confirm, .reveal: confirmOpening(url)
+            }
             return
         }
         guard let target = fileURL(for: destination, relativeTo: document.url) else {
@@ -598,8 +603,24 @@ final class MainWindowController: NSWindowController {
         }
         if ["md", "markdown", "mdown", "mkd"].contains(target.pathExtension.lowercased()) {
             open(url: target)
+        } else if LinkPolicy.action(forFile: target) == .reveal {
+            NSWorkspace.shared.activateFileViewerSelecting([target])
         } else {
             NSWorkspace.shared.open(target)
+        }
+    }
+
+    /// An address another app handles, opened once the user has seen it.
+    private func confirmOpening(_ url: URL) {
+        guard let window else { return }
+        let alert = NSAlert()
+        alert.messageText = String(localized: "Open this link in another app?")
+        alert.informativeText = url.absoluteString
+        alert.addButton(withTitle: String(localized: "Cancel"))
+        alert.addButton(withTitle: String(localized: "Open"))
+        alert.beginSheetModal(for: window) { response in
+            guard response == .alertSecondButtonReturn else { return }
+            NSWorkspace.shared.open(url)
         }
     }
 

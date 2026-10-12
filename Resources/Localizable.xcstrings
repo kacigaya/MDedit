@@ -457,6 +457,9 @@
     "Numbered List" : {
 
     },
+    "Open" : {
+
+    },
     "Open Folder" : {
 
     },
@@ -470,6 +473,9 @@
 
     },
     "Open file…" : {
+
+    },
+    "Open this link in another app?" : {
 
     },
     "Opens the folder for .mdtheme files, with a commented example to start from" : {

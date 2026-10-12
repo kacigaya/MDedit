@@ -75,4 +75,22 @@ struct HTMLRendererTests {
         #expect(out.contains("/tmp/notes/pic.png"))
         #expect(out.contains("https://x.dev"))
     }
+
+    @Test("Script URLs become empty addresses; data: stays for images")
+    func unsafeURLs() {
+        #expect(html("[x](javascript:alert(1))") == "<p><a href=\"\">x</a></p>")
+        #expect(html("[x](JavaScript:alert(1))") == "<p><a href=\"\">x</a></p>")
+        #expect(html("<vbscript:msgbox>") == "<p><a href=\"\">vbscript:msgbox</a></p>")
+        #expect(html("[x](data:text/html,hi)") == "<p><a href=\"\">x</a></p>")
+        #expect(html("![a](data:image/png;base64,AA==)").contains("src=\"data:image/png;base64,AA==\""))
+        #expect(html("[x](https://example.com)").contains("href=\"https://example.com\""))
+    }
+
+    @Test("CDN scripts carry integrity hashes")
+    func subresourceIntegrity() {
+        let page = HTMLRenderer().renderDocument(markdown: "$x$\n\n```mermaid\ngraph TD; A-->B\n```\n", title: "t", css: "")
+        for file in [HTMLRenderer.CDN.katexCSS, HTMLRenderer.CDN.katexJS, HTMLRenderer.CDN.autoRenderJS, HTMLRenderer.CDN.mermaidJS] {
+            #expect(page.contains("\"\(file.url)\" integrity=\"\(file.integrity)\" crossorigin=\"anonymous\""))
+        }
+    }
 }

@@ -354,29 +354,54 @@ public struct HTMLRenderer {
     }
 
     /// Math and diagrams are drawn in the browser, by KaTeX and Mermaid
-    /// loaded from a CDN, and only when the document has any.
+    /// loaded from a CDN, and only when the document has any. Each file
+    /// carries its hash, so the browser refuses one the CDN has altered.
     private func headExtras(_ context: Context) -> String {
         if let scripts { return inlineHeadExtras(context, scripts) }
         var out = ""
         if context.usesMath {
             out += """
-            <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css" />
-            <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
-            <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js"
+            <link rel="stylesheet" href="\(CDN.katexCSS.url)" integrity="\(CDN.katexCSS.integrity)" crossorigin="anonymous" />
+            <script defer src="\(CDN.katexJS.url)" integrity="\(CDN.katexJS.integrity)" crossorigin="anonymous"></script>
+            <script defer src="\(CDN.autoRenderJS.url)" integrity="\(CDN.autoRenderJS.integrity)" crossorigin="anonymous"
               onload="\(Self.renderMathCall)"></script>
 
             """
         }
         if context.usesMermaid {
             out += """
-            <script type="module">
-            import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11.4.1/dist/mermaid.esm.min.mjs";
-            \(Self.mermaidInitialize)
-            </script>
+            <script defer src="\(CDN.mermaidJS.url)" integrity="\(CDN.mermaidJS.integrity)" crossorigin="anonymous"
+              onload='\(Self.mermaidInitialize)'></script>
 
             """
         }
         return out
+    }
+
+    /// KaTeX and Mermaid on jsDelivr, with their Subresource Integrity
+    /// hashes. They must match the versions in `Scripts/fetch-vendor.sh`.
+    public enum CDN {
+        public struct File: Sendable {
+            public let url: String
+            public let integrity: String
+        }
+
+        public static let katexCSS = File(
+            url: "https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css",
+            integrity: "sha384-nB0miv6/jRmo5UMMR1wu3Gz6NLsoTkbqJghGIsx//Rlm+ZU03BU6SQNC66uf4l5+"
+        )
+        public static let katexJS = File(
+            url: "https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js",
+            integrity: "sha384-7zkQWkzuo3B5mTepMUcHkMB5jZaolc2xDwL6VFqjFALcbeS9Ggm/Yr2r3Dy4lfFg"
+        )
+        public static let autoRenderJS = File(
+            url: "https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js",
+            integrity: "sha384-43gviWU0YVjaDtb/GhzOouOXtZMP/7XUzwPTstBeZFe/+rCMvRwr4yROQP43s0Xk"
+        )
+        public static let mermaidJS = File(
+            url: "https://cdn.jsdelivr.net/npm/mermaid@11.4.1/dist/mermaid.min.js",
+            integrity: "sha384-rbtjAdnIQE/aQJGEgXrVUlMibdfTSa4PQju4HDhN3sR2PmaKFzhEafuePsl9H/9I"
+        )
     }
 
     private static let renderMathCall = "renderMathInElement(document.body, {delimiters: [{left: '\\\\[', right: '\\\\]', display: true}, {left: '\\\\(', right: '\\\\)', display: false}], ignoredClasses: ['mermaid']})"
@@ -544,7 +569,7 @@ public struct HTMLRenderer {
                 out += "<a href=\"\(escape(normalizeURL(resolve(destination))))\"\(titleAttribute)>\(nodesHTML(children, characters, context))</a>"
             case let .image(_, _, source, alt, title):
                 let titleAttribute = title.map { " title=\"\(escape($0))\"" } ?? ""
-                let src = (embedImages ? dataURI(forImage: source) : nil) ?? normalizeURL(resolve(source))
+                let src = (embedImages ? dataURI(forImage: source) : nil) ?? normalizeURL(resolve(source), image: true)
                 out += "<img src=\"\(escape(src))\" alt=\"\(escape(alt))\"\(titleAttribute) />"
             case let .autolink(range, markers, url):
                 // Shown as written: `www.x.dev`, or the address without `mailto:`.
@@ -606,9 +631,24 @@ public struct HTMLRenderer {
         return "data:\(type);base64,\(data.base64EncodedString())"
     }
 
+    /// Schemes that run code where the page is opened, rather than lead
+    /// anywhere: a link or image using one gets an empty address instead.
+    /// `data:` stays for images, which cannot run scripts.
+    static func isUnsafeURL(_ url: String, image: Bool = false) -> Bool {
+        guard let colon = url.firstIndex(of: ":") else { return false }
+        // Browsers ignore whitespace and control characters in a scheme.
+        let scheme = url[..<colon].filter { $0.isLetter || $0.isNumber || "+-.".contains($0) }.lowercased()
+        switch scheme {
+        case "javascript", "vbscript": return true
+        case "data": return !(image && url[url.index(after: colon)...].lowercased().hasPrefix("image/"))
+        default: return false
+        }
+    }
+
     /// Percent-encodes what a URL may not contain, leaving existing `%XX`
     /// escapes and URL punctuation alone, as the reference renderer does.
-    private func normalizeURL(_ url: String) -> String {
+    private func normalizeURL(_ url: String, image: Bool = false) -> String {
+        if Self.isUnsafeURL(url, image: image) { return "" }
         let safe = Set("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789;/?:@&=+$,-_.!~*'()#".utf8)
         let bytes = Array(url.utf8)
         var out = ""

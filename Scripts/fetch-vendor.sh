@@ -2,11 +2,17 @@
 # Downloads KaTeX and Mermaid into Resources/vendor, so Scripts/make-app.sh
 # bundles them and HTML export can embed them for pages that work offline.
 # Without them, exported pages load both from jsDelivr as before.
+# Both come from npm, and each tarball must match its pinned SHA-256: what
+# is fetched here ships inside every release. To update a version, change it
+# and its hash (shasum -a 256 the new tarball), and the integrity hashes in
+# HTMLRenderer.swift and Typesetter.swift.
 # Usage: Scripts/fetch-vendor.sh
 set -euo pipefail
 
 KATEX=0.16.11
 MERMAID=11.4.1
+KATEX_SHA256=8c5494c5f7d8e8bf73ff3fe64d4bd09a340e4878b7eec9bbd9ef8d8f3e24193f
+MERMAID_SHA256=ec7b61b391aaa24bf666fd20e48d0a626eeb4a95b95bc6b3016a122d7f0bc2af
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 VENDOR="$ROOT/Resources/vendor"
 TMP="$(mktemp -d)"
@@ -15,15 +21,27 @@ trap 'rm -rf "$TMP"' EXIT
 rm -rf "$VENDOR"
 mkdir -p "$VENDOR/katex" "$VENDOR/mermaid"
 
-curl -fsSL "https://registry.npmjs.org/katex/-/katex-$KATEX.tgz" -o "$TMP/katex.tgz"
-tar -xzf "$TMP/katex.tgz" -C "$TMP"
-cp "$TMP/package/dist/katex.min.css" "$TMP/package/dist/katex.min.js" "$VENDOR/katex/"
-mkdir -p "$VENDOR/katex/contrib" "$VENDOR/katex/fonts"
-cp "$TMP/package/dist/contrib/auto-render.min.js" "$VENDOR/katex/contrib/"
-cp "$TMP/package/dist/fonts/"*.woff2 "$VENDOR/katex/fonts/"
-cp "$TMP/package/LICENSE" "$VENDOR/katex/LICENSE"
+# Downloads a package's tarball and stops unless it has the expected hash.
+fetch() {
+	local name="$1" version="$2" sha256="$3"
+	curl -fsSL "https://registry.npmjs.org/$name/-/$name-$version.tgz" -o "$TMP/$name.tgz"
+	echo "$sha256  $TMP/$name.tgz" | shasum -a 256 -c --quiet - || {
+		echo "$name $version does not match its pinned SHA-256" >&2
+		exit 1
+	}
+	mkdir -p "$TMP/$name"
+	tar -xzf "$TMP/$name.tgz" -C "$TMP/$name"
+}
 
-curl -fsSL "https://cdn.jsdelivr.net/npm/mermaid@$MERMAID/dist/mermaid.min.js" -o "$VENDOR/mermaid/mermaid.min.js"
-curl -fsSL "https://cdn.jsdelivr.net/npm/mermaid@$MERMAID/LICENSE" -o "$VENDOR/mermaid/LICENSE"
+fetch katex "$KATEX" "$KATEX_SHA256"
+fetch mermaid "$MERMAID" "$MERMAID_SHA256"
+
+cp "$TMP/katex/package/dist/katex.min.css" "$TMP/katex/package/dist/katex.min.js" "$VENDOR/katex/"
+mkdir -p "$VENDOR/katex/contrib" "$VENDOR/katex/fonts"
+cp "$TMP/katex/package/dist/contrib/auto-render.min.js" "$VENDOR/katex/contrib/"
+cp "$TMP/katex/package/dist/fonts/"*.woff2 "$VENDOR/katex/fonts/"
+cp "$TMP/katex/package/LICENSE" "$VENDOR/katex/LICENSE"
+
+cp "$TMP/mermaid/package/dist/mermaid.min.js" "$TMP/mermaid/package/LICENSE" "$VENDOR/mermaid/"
 
 echo "fetched KaTeX $KATEX and Mermaid $MERMAID into $VENDOR"

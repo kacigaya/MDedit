@@ -5,6 +5,16 @@ workflow publishes the section for a version as its release notes.
 
 ## [Unreleased]
 
+### Security
+- ⌘-clicking a link no longer runs programs or scripts: apps, `.command`,
+  shell scripts and other executables are shown in Finder instead. Links with
+  schemes other than `http`, `https` and `mailto` ask before opening.
+- KaTeX and Mermaid are checked against pinned SHA-256 hashes when bundled,
+  and exported pages load them from the CDN with Subresource Integrity.
+- Exported HTML drops `javascript:`, `vbscript:` and non-image `data:` URLs.
+- Web images over 50 MB are not loaded; the math and diagram web view cannot
+  navigate away from its page; the update checker only opens GitHub pages.
+
 ## [0.9.3] - 2026-10-12
 
 Tab shortcuts and animations.

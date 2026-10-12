@@ -1,4 +1,5 @@
 import AppKit
+import MarkdownKit
 import WebKit
 
 /// Typesets TeX with KaTeX and draws Mermaid diagrams, into images the editor
@@ -181,6 +182,7 @@ final class Typesetter: NSObject {
     /// The typesetting page: KaTeX and Mermaid inlined when the app carries
     /// them (`Scripts/fetch-vendor.sh`), from jsDelivr otherwise.
     private static func page() -> (html: String, baseURL: URL?)? {
+        typealias CDN = HTMLRenderer.CDN
         var head: String
         if let scripts = Exporter.bundledScripts() {
             head = """
@@ -190,9 +192,9 @@ final class Typesetter: NSObject {
             """
         } else {
             head = """
-            <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css">
-            <script src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
-            <script src="https://cdn.jsdelivr.net/npm/mermaid@11.4.1/dist/mermaid.min.js"></script>
+            <link rel="stylesheet" href="\(CDN.katexCSS.url)" integrity="\(CDN.katexCSS.integrity)" crossorigin="anonymous">
+            <script src="\(CDN.katexJS.url)" integrity="\(CDN.katexJS.integrity)" crossorigin="anonymous"></script>
+            <script src="\(CDN.mermaidJS.url)" integrity="\(CDN.mermaidJS.integrity)" crossorigin="anonymous"></script>
             """
         }
         head += """
@@ -276,6 +278,14 @@ final class Typesetter: NSObject {
 }
 
 extension Typesetter: WKNavigationDelegate {
+    /// The typesetting page is the only thing this view ever shows: a link
+    /// or redirect a formula or diagram might smuggle in goes nowhere.
+    nonisolated func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction) async -> WKNavigationActionPolicy {
+        await MainActor.run {
+            !isPageLoaded && navigationAction.targetFrame?.isMainFrame == true ? .allow : .cancel
+        }
+    }
+
     nonisolated func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         MainActor.assumeIsolated {
             isPageLoaded = true

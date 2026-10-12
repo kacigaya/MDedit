@@ -75,10 +75,25 @@ final class ImageCache {
         if url.isFileURL {
             data = try? Data(contentsOf: url)
         } else {
-            data = try? await URLSession.shared.data(from: url).0
+            data = await download(url)
         }
         guard let data else { return nil }
         return decoded(data) ?? NSImage(data: data).flatMap { $0.size.width > 0 && $0.size.height > 0 ? $0 : nil }
+    }
+
+    /// The most a web image may weigh: a document must not be able to make
+    /// the app read an endless response into memory.
+    nonisolated static let maxDownloadBytes = 50 * 1024 * 1024
+
+    /// A web image's bytes, by way of a file so an oversized one never
+    /// reaches memory. Nil when it fails or is too large.
+    private nonisolated static func download(_ url: URL) async -> Data? {
+        guard let (file, response) = try? await URLSession.shared.download(from: url) else { return nil }
+        defer { try? FileManager.default.removeItem(at: file) }
+        if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) { return nil }
+        let size = (try? file.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? Int.max
+        guard size <= maxDownloadBytes else { return nil }
+        return try? Data(contentsOf: file)
     }
 
     /// A bitmap decoded here, off the main thread, rather than on its first
