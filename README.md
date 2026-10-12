@@ -165,9 +165,7 @@ locally, or the secrets `release.yml` lists. `Scripts/make-app.sh release
 - `Scripts/update-strings.sh` — collects every localizable string into
   `Resources/Localizable.xcstrings`, which `make-app.sh` compiles into the bundle.
   Add a language by translating there (in Xcode, or any `.xcstrings` editor).
-- `Scripts/make-icon.swift` — redraws the document icon (the app icon now comes from `docs/logos/logo-3-page-pencil.svg`; running it overwrites `AppIcon.icns` with the old mark).
 - `Scripts/make-icon.swift` — redraws the app icon (the page-and-pencil logo, also in `docs/logos/`) and the document icon.
-  5 MB, 100k-line document.
 
 ## Keyboard shortcuts
 
