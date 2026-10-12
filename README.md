@@ -1,8 +1,17 @@
-# MdEdit
+<p align="center">
+  <img src="docs/icon.png" alt="MdEdit icon" width="160" height="160">
+</p>
 
-A native macOS markdown editor with real-time in-place WYSIWYG, in the spirit of
-[MarkText](https://github.com/marktext/marktext) — but written in Swift, with no
-Electron, no web view for editing, and no third-party Swift dependencies.
+<h1 align="center">MdEdit</h1>
+
+<p align="center">
+  A native macOS markdown editor with real-time in-place WYSIWYG.<br>
+  Written in Swift — no Electron, no web view for editing, no third-party Swift dependencies.
+</p>
+
+<p align="center">
+  <a href="https://github.com/msk-mdi/MDedit/releases"><b>Download</b></a>
+</p>
 
 Type `# ` and the line *becomes* a heading where you typed it. `**bold**` renders
 bold with the asterisks hidden, until you move the caret onto that line and the raw
@@ -157,7 +166,7 @@ locally, or the secrets `release.yml` lists. `Scripts/make-app.sh release
 - `Scripts/update-strings.sh` — collects every localizable string into
   `Resources/Localizable.xcstrings`, which `make-app.sh` compiles into the bundle.
   Add a language by translating there (in Xcode, or any `.xcstrings` editor).
-- `Scripts/make-icon.swift` — redraws the app and document icons.
+- `Scripts/make-icon.swift` — redraws the document icon (the app icon now comes from `docs/logos/logo-3-page-pencil.svg`; running it overwrites `AppIcon.icns` with the old mark).
 - `MDEDIT_BENCHMARKS=1 swift test -c release --filter Performance` — timings for a
   5 MB, 100k-line document.
 
