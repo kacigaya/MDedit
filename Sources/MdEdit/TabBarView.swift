@@ -1,6 +1,8 @@
 import AppKit
 
 struct TabDescriptor {
+    /// Follows the document, so a tab keeps its segment as tabs come and go.
+    var id: UUID
     var title: String
     var isDirty: Bool
 }
@@ -21,11 +23,14 @@ protocol TabBarViewDelegate: AnyObject {
 /// The track is a tinted fill rather than glass, so the thumb is the only glass
 /// here — glass stacked on glass reads as muddy, and the thumb is what should
 /// look lifted.
+///
+/// Segments and the thumb are placed by frame rather than constraints, so a
+/// change of tabs is one animation: a new tab opens out from nothing, a closed
+/// one folds away, and the rest slide to their new places with the thumb.
 final class TabBarView: NSView {
     weak var delegate: TabBarViewDelegate?
 
     private let track = NSView()
-    private let stack = NSStackView()
     private let thumb: GlassPanel
     private let newTabButton: GlassPanel
     private let plusButton = NSButton()
@@ -34,13 +39,12 @@ final class TabBarView: NSView {
     /// The position of the tab being dragged, which moves as it is reordered.
     private var draggedIndex: Int?
 
-    private var thumbLeading: NSLayoutConstraint?
-    private var thumbWidth: NSLayoutConstraint?
-
     private(set) var tabs: [TabDescriptor] = []
     private(set) var selectedIndex = 0
 
     private var theme: Theme = .current(for: NSApp.effectiveAppearance)
+
+    private static let animationDuration: TimeInterval = 0.14
 
     override init(frame frameRect: NSRect) {
         thumb = GlassPanel(
@@ -67,15 +71,9 @@ final class TabBarView: NSView {
         track.layer?.cornerRadius = Metrics.trackHeight / 2
         track.layer?.cornerCurve = .continuous
 
-        stack.orientation = .horizontal
-        stack.alignment = .centerY
-        stack.distribution = .fillEqually
-        stack.spacing = 0
-        stack.translatesAutoresizingMaskIntoConstraints = false
-
+        thumb.translatesAutoresizingMaskIntoConstraints = true
         // Thumb first: it sits behind the segment labels.
         track.addSubview(thumb)
-        track.addSubview(stack)
         addSubview(track)
         addSubview(newTabButton)
 
@@ -88,11 +86,6 @@ final class TabBarView: NSView {
         setAccessibilityRole(.tabGroup)
         setAccessibilityLabel(String(localized: "Tabs"))
 
-        let thumbLeading = thumb.leadingAnchor.constraint(equalTo: track.leadingAnchor, constant: Metrics.thumbInset)
-        let thumbWidth = thumb.widthAnchor.constraint(equalToConstant: 0)
-        self.thumbLeading = thumbLeading
-        self.thumbWidth = thumbWidth
-
         NSLayoutConstraint.activate([
             track.leadingAnchor.constraint(equalTo: leadingAnchor, constant: Metrics.chromeInset),
             track.centerYAnchor.constraint(equalTo: centerYAnchor),
@@ -104,16 +97,6 @@ final class TabBarView: NSView {
             newTabButton.widthAnchor.constraint(equalToConstant: Metrics.plusDiameter),
             newTabButton.heightAnchor.constraint(equalToConstant: Metrics.plusDiameter),
 
-            stack.leadingAnchor.constraint(equalTo: track.leadingAnchor),
-            stack.trailingAnchor.constraint(equalTo: track.trailingAnchor),
-            stack.topAnchor.constraint(equalTo: track.topAnchor),
-            stack.bottomAnchor.constraint(equalTo: track.bottomAnchor),
-
-            thumbLeading,
-            thumbWidth,
-            thumb.topAnchor.constraint(equalTo: track.topAnchor, constant: Metrics.thumbInset),
-            thumb.bottomAnchor.constraint(equalTo: track.bottomAnchor, constant: -Metrics.thumbInset),
-
             heightAnchor.constraint(equalToConstant: Metrics.trackHeight + 2 * Metrics.tabGap),
         ])
     }
@@ -122,16 +105,70 @@ final class TabBarView: NSView {
     required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
 
     func setTabs(_ tabs: [TabDescriptor], selected: Int) {
-        let countChanged = tabs.count != segments.count
+        let oldIDs = segments.map(\.id)
+        let reused = Dictionary(uniqueKeysWithValues: segments.map { ($0.id, $0) })
+        let ids = Set(tabs.map(\.id))
+        let removed = segments.filter { !ids.contains($0.id) }
+        var added: [TabSegment] = []
+        segments = tabs.enumerated().map { index, tab in
+            if let segment = reused[tab.id] {
+                segment.index = index
+                return segment
+            }
+            let segment = makeSegment(id: tab.id, index: index)
+            added.append(segment)
+            return segment
+        }
+        let moved = oldIDs != segments.map(\.id) || selected != selectedIndex
         self.tabs = tabs
         selectedIndex = selected
-
-        if countChanged { rebuildSegments() }
-        for (index, segment) in segments.enumerated() where index < tabs.count {
+        for (index, segment) in segments.enumerated() {
             segment.apply(tabs[index], isSelected: index == selected, theme: theme)
         }
-        // A brand new tab appears in place rather than sliding from the old one.
-        moveThumb(animated: !countChanged)
+
+        // Typing refreshes the tabs on every keystroke; only a change of
+        // tabs or selection moves anything.
+        guard moved else { return }
+        layoutSubtreeIfNeeded()
+        guard shouldAnimate else {
+            for segment in removed { segment.removeFromSuperview() }
+            layoutSegments(animated: false)
+            return
+        }
+
+        // A new tab opens out from a sliver where it will sit.
+        let count = segments.count
+        for segment in added {
+            let slot = slotFrame(at: segment.index, count: count)
+            segment.frame = NSRect(x: slot.minX, y: slot.minY, width: 0, height: slot.height)
+            segment.alphaValue = 0
+        }
+        // A closing tab no longer answers clicks while it folds away.
+        for segment in removed {
+            segment.onSelect = nil
+            segment.onClose = nil
+            segment.onDrag = nil
+        }
+        // With no thumb to slide from, it fades in where it lands.
+        if thumb.isHidden { thumb.alphaValue = 0 }
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = Self.animationDuration
+            context.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            // Lets each segment's title follow its frame instead of jumping.
+            context.allowsImplicitAnimation = true
+            layoutSegments(animated: true)
+            for segment in added { segment.alphaValue = 1 }
+            for segment in removed {
+                var folded = segment.frame
+                folded.size.width = 0
+                segment.frame = folded
+                segment.alphaValue = 0
+            }
+            thumb.alphaValue = 1
+            track.layoutSubtreeIfNeeded()
+        } completionHandler: {
+            for segment in removed { segment.removeFromSuperview() }
+        }
     }
 
     func applyTheme(_ theme: Theme) {
@@ -139,64 +176,67 @@ final class TabBarView: NSView {
         track.layer?.backgroundColor = theme.trackFill.cgColor
         plusButton.contentTintColor = theme.secondaryText
         thumb.tint = nil
-        setTabs(tabs, selected: selectedIndex)
+        for (index, segment) in segments.enumerated() where index < tabs.count {
+            segment.apply(tabs[index], isSelected: index == selectedIndex, theme: theme)
+        }
     }
 
     override func layout() {
         super.layout()
-        moveThumb(animated: false)
+        layoutSegments(animated: false)
     }
 
-    private func rebuildSegments() {
-        for segment in segments { segment.removeFromSuperview() }
-        segments = tabs.indices.map { index in
-            let segment = TabSegment(index: index)
-            segment.onSelect = { [weak self] index in
-                guard let self else { return }
-                draggedIndex = index
-                delegate?.tabBar(self, didSelect: index)
-            }
-            segment.onDrag = { [weak self] event in self?.dragTab(with: event) }
-            segment.onRelease = { [weak self] in self?.draggedIndex = nil }
-            segment.onClose = { [weak self] index in
-                guard let self else { return }
-                delegate?.tabBar(self, didRequestClose: index)
-            }
-            stack.addArrangedSubview(segment)
-            return segment
+    /// Animations play only where someone can see them, and not for anyone
+    /// who has asked for less motion.
+    private var shouldAnimate: Bool {
+        window?.isVisible == true
+            && track.bounds.width > 0
+            && !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+    }
+
+    private func slotFrame(at index: Int, count: Int) -> NSRect {
+        let width = track.bounds.width / CGFloat(max(count, 1))
+        return NSRect(x: CGFloat(index) * width, y: 0, width: width, height: track.bounds.height)
+    }
+
+    /// Puts each segment in its slot and the thumb under the selected one.
+    /// This is also the tab-switch animation: one piece of glass moving, not
+    /// a crossfade.
+    private func layoutSegments(animated: Bool) {
+        let count = segments.count
+        for (index, segment) in segments.enumerated() {
+            let slot = slotFrame(at: index, count: count)
+            // Unchanged frames are left alone so a layout pass mid-animation
+            // does not cut it short.
+            guard segment.frame != slot else { continue }
+            if animated { segment.animator().frame = slot } else { segment.frame = slot }
         }
-    }
 
-    /// Slides the thumb under the selected segment. This is the tab-switch
-    /// animation: one piece of glass moving, not a crossfade.
-    private func moveThumb(animated: Bool) {
         guard segments.indices.contains(selectedIndex) else {
             thumb.isHidden = true
             return
         }
         thumb.isHidden = false
-        layoutSubtreeIfNeeded()
+        let target = slotFrame(at: selectedIndex, count: count).insetBy(dx: Metrics.thumbInset, dy: Metrics.thumbInset)
+        guard thumb.frame != target else { return }
+        if animated { thumb.animator().frame = target } else { thumb.frame = target }
+    }
 
-        let segment = segments[selectedIndex]
-        let leading = segment.frame.minX + Metrics.thumbInset
-        let width = max(0, segment.frame.width - 2 * Metrics.thumbInset)
-        guard thumbLeading?.constant != leading || thumbWidth?.constant != width else { return }
-
-        let apply = {
-            self.thumbLeading?.constant = leading
-            self.thumbWidth?.constant = width
+    private func makeSegment(id: UUID, index: Int) -> TabSegment {
+        let segment = TabSegment(index: index, id: id)
+        segment.onSelect = { [weak self] index in
+            guard let self else { return }
+            draggedIndex = index
+            delegate?.tabBar(self, didSelect: index)
         }
-        if animated, !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
-            NSAnimationContext.runAnimationGroup { context in
-                context.duration = 0.22
-                context.timingFunction = CAMediaTimingFunction(name: .easeOut)
-                context.allowsImplicitAnimation = true
-                apply()
-                layoutSubtreeIfNeeded()
-            }
-        } else {
-            apply()
+        segment.onDrag = { [weak self] event in self?.dragTab(with: event) }
+        segment.onRelease = { [weak self] in self?.draggedIndex = nil }
+        segment.onClose = { [weak self] index in
+            guard let self else { return }
+            delegate?.tabBar(self, didRequestClose: index)
         }
+        track.addSubview(segment)
+        return segment
     }
 
     /// Reorders live: crossing into a neighbour's segment swaps places, and
@@ -210,8 +250,8 @@ final class TabBarView: NSView {
             delegate?.tabBar(self, didDragOutTabAt: source)
             return
         }
-        let x = stack.convert(event.locationInWindow, from: nil).x
-        let width = stack.bounds.width / CGFloat(segments.count)
+        let x = track.convert(event.locationInWindow, from: nil).x
+        let width = track.bounds.width / CGFloat(segments.count)
         guard width > 0 else { return }
         let target = min(max(0, Int(x / width)), segments.count - 1)
         guard target != source else { return }
@@ -227,7 +267,9 @@ final class TabBarView: NSView {
 /// One segment of the track: a centred title, a dirty dot, and a close button
 /// that appears on hover.
 final class TabSegment: NSView {
-    let index: Int
+    /// Where the segment sits, which changes as tabs are reordered or closed.
+    var index: Int
+    let id: UUID
     var onSelect: ((Int) -> Void)?
     var onClose: ((Int) -> Void)?
     var onDrag: ((NSEvent) -> Void)?
@@ -240,10 +282,13 @@ final class TabSegment: NSView {
     private var isSelected = false
     private var isHovering = false
 
-    init(index: Int) {
+    init(index: Int, id: UUID = UUID()) {
         self.index = index
+        self.id = id
         super.init(frame: .zero)
-        translatesAutoresizingMaskIntoConstraints = false
+        // Placed by the tab bar's frames; clipped so it can open from nothing.
+        wantsLayer = true
+        clipsToBounds = true
 
         label.font = .systemFont(ofSize: 13, weight: .medium)
         label.alignment = .center
@@ -268,11 +313,20 @@ final class TabSegment: NSView {
         addSubview(closeButton)
         addSubview(dirtyDot)
 
+        // Short of required: a segment opening or folding away is briefly
+        // narrower than its margins.
+        let labelLeading = label.leadingAnchor.constraint(greaterThanOrEqualTo: leadingAnchor, constant: 24)
+        let labelTrailing = label.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -24)
+        labelLeading.priority = .init(999)
+        labelTrailing.priority = .init(999)
+
         NSLayoutConstraint.activate([
             label.centerXAnchor.constraint(equalTo: centerXAnchor),
             label.centerYAnchor.constraint(equalTo: centerYAnchor),
-            label.leadingAnchor.constraint(greaterThanOrEqualTo: leadingAnchor, constant: 24),
-            label.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -24),
+            // Short of required: a segment opening or folding away is briefly
+            // narrower than its margins.
+            labelLeading,
+            labelTrailing,
 
             closeButton.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 8),
             closeButton.centerYAnchor.constraint(equalTo: centerYAnchor),

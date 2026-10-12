@@ -172,9 +172,10 @@ locally, or the secrets `release.yml` lists. `Scripts/make-app.sh release
 | `⇧⌘8` / `⇧⌘7` / `⇧⌘9` | Bulleted / numbered / task list |
 | `⇧⌘'` | Blockquote |
 | `⌥⌘C` | Code block |
-| `⌘T` / `⌘W` | New tab / close tab |
+| `⌘T` / `⌘W` / `⇧⌘T` | New tab / close tab / reopen closed tab |
 | `⌘N` | New window |
-| `⇧⌘[` / `⇧⌘]` | Previous / next tab |
+| `⇧⌘[` / `⇧⌘]`, `⌃⇧Tab` / `⌃Tab` | Previous / next tab |
+| `⌘1`…`⌘8`, `⌘9` | Go to a tab by position, last tab |
 | `⌘F` / `⌘G` / `⌥⌘F` | Find, find next, find and replace |
 | `⌘P` / `⇧⌘O` | Quick Open / open a folder |
 | `⇧⌘E` / `⇧⌘L` / `⇧⌘F` | Files / outline / Find in Folder |

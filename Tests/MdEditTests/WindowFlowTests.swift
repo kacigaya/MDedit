@@ -173,4 +173,39 @@ struct WindowFlowTests {
         #expect(recorded() == nil)
         #expect(!FileManager.default.fileExists(atPath: snapshot.path))
     }
+
+    @Test("⌘1…⌘8 pick a tab by position and ⌘9 the last; a tab number past the end does nothing")
+    func selectTabByNumber() throws {
+        let controller = makeWindow()
+        for _ in 0..<4 { controller.newDocument() }
+        func press(_ tag: Int) {
+            let item = NSMenuItem()
+            item.tag = tag
+            controller.selectDocumentTab(item)
+        }
+        press(2)
+        #expect(controller.activeDocument === controller.documents[1])
+        press(9)
+        #expect(controller.activeDocument === controller.documents.last)
+        press(1)
+        press(6)
+        #expect(controller.activeDocument === controller.documents[0])
+    }
+
+    @Test("Reopen Closed Tab brings back the most recently closed file")
+    func reopenClosedTab() throws {
+        let controller = makeWindow()
+        let first = try openEdited("first.md", in: controller)
+        let second = try openEdited("second.md", in: controller)
+        script(controller, [.discard, .discard])()
+        let urls = [first.url, second.url]
+        controller.closeDocument(at: controller.documents.firstIndex { $0 === first }!)
+        controller.closeDocument(at: controller.documents.firstIndex { $0 === second }!)
+        #expect(controller.documents.allSatisfy { !urls.contains($0.url) })
+
+        controller.reopenClosedTab(nil)
+        #expect(controller.activeDocument?.url == second.url)
+        controller.reopenClosedTab(nil)
+        #expect(controller.activeDocument?.url == first.url)
+    }
 }

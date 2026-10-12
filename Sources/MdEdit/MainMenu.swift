@@ -40,6 +40,15 @@ enum MainMenu {
         menu.addItem(item)
     }
 
+    /// A shortcut with no menu item of its own: an alternative key for a command shown elsewhere.
+    private static func hidden(_ menu: NSMenu, _ action: Selector, _ key: String, _ modifiers: NSEvent.ModifierFlags = .command) {
+        let item = NSMenuItem(title: "", action: action, keyEquivalent: key)
+        item.keyEquivalentModifierMask = modifiers
+        item.isHidden = true
+        item.allowsKeyEquivalentWhenHidden = true
+        menu.addItem(item)
+    }
+
     private static func appMenu() -> NSMenuItem {
         submenu("MdEdit") { menu in
             add(menu, "About MdEdit", #selector(NSApplication.orderFrontStandardAboutPanel(_:)))
@@ -71,6 +80,7 @@ enum MainMenu {
 
             menu.addItem(.separator())
             add(menu, "Close Tab", #selector(MainWindowController.closeActiveTab(_:)), "w")
+            add(menu, "Reopen Closed Tab", #selector(MainWindowController.reopenClosedTab(_:)), "t", [.command, .shift])
             add(menu, "Save", #selector(AppDelegate.saveDocument(_:)), "s")
             add(menu, "Save As…", #selector(AppDelegate.saveDocumentAs(_:)), "s", [.command, .shift])
             menu.addItem(submenu("Revert To") { revert in
@@ -172,6 +182,15 @@ enum MainMenu {
         submenu("View") { menu in
             add(menu, "Next Tab", #selector(MainWindowController.selectNextDocumentTab(_:)), "]", [.command, .shift])
             add(menu, "Previous Tab", #selector(MainWindowController.selectPreviousDocumentTab(_:)), "[", [.command, .shift])
+            // ⌃Tab and ⌃⇧Tab cycle tabs too, as in browsers, without crowding the menu.
+            hidden(menu, #selector(MainWindowController.selectNextDocumentTab(_:)), "\t", .control)
+            hidden(menu, #selector(MainWindowController.selectPreviousDocumentTab(_:)), "\t", [.control, .shift])
+            menu.addItem(submenu("Go to Tab") { tabs in
+                for number in 1...8 {
+                    add(tabs, "Tab \(number)", #selector(MainWindowController.selectDocumentTab(_:)), "\(number)", tag: number)
+                }
+                add(tabs, "Last Tab", #selector(MainWindowController.selectDocumentTab(_:)), "9", tag: 9)
+            })
             menu.addItem(.separator())
             add(menu, "Show Files", #selector(MainWindowController.toggleFiles(_:)), "e", [.command, .shift])
             add(menu, "Show Outline", #selector(MainWindowController.toggleOutline(_:)), "l", [.command, .shift])
@@ -189,10 +208,7 @@ enum MainMenu {
             add(menu, "Actual Size", #selector(MainWindowController.resetZoom(_:)), "0")
             add(menu, "Zoom In", #selector(MainWindowController.zoomIn(_:)), "+")
             // ⌘= reaches Zoom In without Shift, as in every Mac app.
-            let unshifted = NSMenuItem(title: String(localized: "Zoom In"), action: #selector(MainWindowController.zoomIn(_:)), keyEquivalent: "=")
-            unshifted.isHidden = true
-            unshifted.allowsKeyEquivalentWhenHidden = true
-            menu.addItem(unshifted)
+            hidden(menu, #selector(MainWindowController.zoomIn(_:)), "=")
             add(menu, "Zoom Out", #selector(MainWindowController.zoomOut(_:)), "-")
             menu.addItem(.separator())
             add(menu, "Enter Full Screen", #selector(NSWindow.toggleFullScreen(_:)), "f", [.command, .control])

@@ -5,6 +5,14 @@ workflow publishes the section for a version as its release notes.
 
 ## [Unreleased]
 
+### Added
+- ⌘1…⌘8 go to a tab by position and ⌘9 to the last (View ▸ Go to Tab);
+  ⌃Tab and ⌃⇧Tab cycle tabs; File ▸ Reopen Closed Tab (⇧⌘T) brings back
+  closed files.
+- Tabs animate: a new tab opens out as its neighbours make room, a closed one
+  folds away, reordered tabs slide into place, and switching fades the page in
+  as the thumb slides. Reduce Motion turns it all off.
+
 ## [0.9.2] - 2026-10-11
 
 Performance, from an audit of the whole app.

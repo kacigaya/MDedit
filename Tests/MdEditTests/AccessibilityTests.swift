@@ -64,7 +64,7 @@ struct AccessibilityTests {
     @Test("Tab segments are radio-button tabs with the title, dirty state and a close action")
     func tabSegments() {
         let segment = TabSegment(index: 0)
-        segment.apply(TabDescriptor(title: "notes.md", isDirty: true), isSelected: true, theme: .light)
+        segment.apply(TabDescriptor(id: UUID(), title: "notes.md", isDirty: true), isSelected: true, theme: .light)
         #expect(segment.isAccessibilityElement())
         #expect(segment.accessibilityRole() == .radioButton)
         #expect(segment.accessibilityLabel() == "notes.md, edited")

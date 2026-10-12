@@ -8,6 +8,8 @@ final class MainWindowController: NSWindowController {
     private(set) var documents: [Document] = []
     private var editors: [ObjectIdentifier: EditorViewController] = [:]
     private var selection = 0
+    /// Files whose tabs were closed, most recent last, for Reopen Closed Tab.
+    private var closedTabURLs: [URL] = []
 
     private let tabBar = TabBarView()
     private let statusBar = StatusBarView()
@@ -225,10 +227,12 @@ final class MainWindowController: NSWindowController {
         guard let editor = editors[ObjectIdentifier(document)] else { return }
 
         if currentEditor !== editor {
+            let isSwitch = currentEditor != nil
             currentEditor?.view.removeFromSuperview()
             currentEditor?.removeFromParent()
             install(editor)
             currentEditor = editor
+            if isSwitch { fadeIn(editor.view) }
         }
         window?.makeFirstResponder(editor.textView)
         window?.title = document.displayName
@@ -236,6 +240,17 @@ final class MainWindowController: NSWindowController {
         refreshTabs()
         refreshStatus()
         refreshSidebar()
+    }
+
+    /// The incoming tab's page fades up as the thumb slides to it.
+    private func fadeIn(_ view: NSView) {
+        guard window?.isVisible == true, !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion else { return }
+        view.alphaValue = 0
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0.1
+            context.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            view.animator().alphaValue = 1
+        }
     }
 
     private func install(_ editor: EditorViewController) {
@@ -262,12 +277,14 @@ final class MainWindowController: NSWindowController {
         guard document.isDirty else {
             remove(document)
             recovery.remove(id: document.id)
+            rememberClosed(document)
             return
         }
         confirmDiscard(document) { [weak self] discard in
             guard discard, let self else { return }
             remove(document)
             recovery.remove(id: document.id)
+            rememberClosed(document)
         }
     }
 
@@ -290,6 +307,22 @@ final class MainWindowController: NSWindowController {
         } else {
             select(index: min(index, documents.count - 1))
         }
+    }
+
+    private func rememberClosed(_ document: Document) {
+        guard let url = document.url else { return }
+        closedTabURLs.removeAll { $0 == url }
+        closedTabURLs.append(url)
+    }
+
+    @objc func reopenClosedTab(_ sender: Any?) {
+        // Skips files that have since gone or are open again.
+        while let url = closedTabURLs.popLast() {
+            guard FileManager.default.fileExists(atPath: url.path) else { continue }
+            open(url: url)
+            return
+        }
+        NSSound.beep()
     }
 
     // MARK: - Moving tabs between windows
@@ -348,7 +381,7 @@ final class MainWindowController: NSWindowController {
 
     func refreshTabs() {
         tabBar.setTabs(
-            documents.map { TabDescriptor(title: $0.displayName, isDirty: $0.isDirty) },
+            documents.map { TabDescriptor(id: $0.id, title: $0.displayName, isDirty: $0.isDirty) },
             selected: selection
         )
     }
@@ -928,6 +961,14 @@ final class MainWindowController: NSWindowController {
         select(index: (selection - 1 + documents.count) % documents.count)
     }
 
+    /// ⌘1…⌘8 pick a tab by position; ⌘9 (tag 9) is always the last tab.
+    @objc func selectDocumentTab(_ sender: Any?) {
+        guard let tag = (sender as? NSMenuItem)?.tag, !documents.isEmpty else { return }
+        let index = tag == 9 ? documents.count - 1 : tag - 1
+        guard documents.indices.contains(index) else { return NSSound.beep() }
+        select(index: index)
+    }
+
     // MARK: - Format and export commands
 
     @objc func toggleBold(_ sender: Any?) { currentEditor?.toggleInline("**") }
@@ -1118,6 +1159,8 @@ extension MainWindowController: NSMenuItemValidation {
         switch item.action {
         case #selector(moveTabToNewWindow(_:)):
             return documents.count > 1
+        case #selector(reopenClosedTab(_:)):
+            return !closedTabURLs.isEmpty
         case #selector(exportWithPandoc(_:)):
             let installed = Pandoc.executable != nil
             item.title = installed ? String(localized: "With Pandoc…") : String(localized: "With Pandoc (not installed)")
