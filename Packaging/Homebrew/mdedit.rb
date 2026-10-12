@@ -7,8 +7,8 @@
 # app, and it opens without Gatekeeper's prompt.
 # For each release, set version and the DMG's sha256 (make-dmg.sh prints it).
 cask "mdedit" do
-  version "0.9.2"
-  sha256 "ebdd4a7df5d3dae5aa1aa632def1292b1beece5ce695c35deafecd317d190248"
+  version "0.9.3"
+  sha256 "5c8a667e79027dca378249286502bffbbb01bd63a0da4023d1d77a093b38e27c"
 
   url "https://github.com/msk-mdi/MDedit/releases/download/v#{version}/MdEdit-#{version}.dmg"
   name "MdEdit"
