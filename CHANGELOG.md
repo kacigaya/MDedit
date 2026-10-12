@@ -5,6 +5,10 @@ workflow publishes the section for a version as its release notes.
 
 ## [Unreleased]
 
+## [0.9.3] - 2026-10-12
+
+Tab shortcuts and animations.
+
 ### Added
 - ⌘1…⌘8 go to a tab by position and ⌘9 to the last (View ▸ Go to Tab);
   ⌃Tab and ⌃⇧Tab cycle tabs; File ▸ Reopen Closed Tab (⇧⌘T) brings back
