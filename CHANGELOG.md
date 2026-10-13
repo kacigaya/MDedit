@@ -6,6 +6,11 @@ workflow publishes the section for a version as its release notes.
 ## [Unreleased]
 
 ### Security
+- Release builds run in the App Sandbox. The `mdedit` command is now a small
+  script, `MdEdit.app/Contents/Helpers/mdedit`, that opens the files it is
+  given and passes them to the sandboxed app, so markdown from the command
+  line is rendered inside the sandbox too. `mdedit file.md` opens the file in
+  the app. `--embed-images` needs an unsandboxed build.
 - ⌘-clicking a link no longer runs programs or scripts: apps, `.command`,
   shell scripts and other executables are shown in Finder instead. Links with
   schemes other than `http`, `https` and `mailto` ask before opening.

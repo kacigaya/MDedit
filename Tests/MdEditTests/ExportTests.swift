@@ -139,6 +139,8 @@ struct ExportTests {
         #expect(full == .init(input: "a.md", output: "a.html", standalone: true, themeName: "Nord", tableOfContents: true, numberHeadings: false, embedImages: true))
         #expect(throws: CommandLineRenderer.Failure.self) { try CommandLineRenderer.parse(["--output"]) }
         #expect(throws: CommandLineRenderer.Failure.self) { try CommandLineRenderer.parse(["a.md", "b.md"]) }
+        #expect(try CommandLineRenderer.parse(["-", "--base", "/notes/a.md"]) == .init(base: "/notes/a.md"))
+        #expect(throws: CommandLineRenderer.Failure.self) { try CommandLineRenderer.parse(["--base"]) }
 
         let body = CommandLineRenderer.render("# Hi", invocation: .init(), baseURL: nil)
         #expect(body == "<h1 id=\"hi\">Hi</h1>\n")

@@ -49,6 +49,10 @@ fi
 if [ -d "$ROOT/Resources/vendor" ]; then
 	cp -R "$ROOT/Resources/vendor" "$APP/Contents/Resources/vendor"
 fi
+# The mdedit command: a script outside the sandbox that opens the files it is
+# given and hands them to the app (see the script).
+mkdir -p "$APP/Contents/Helpers"
+install -m 755 "$ROOT/Resources/CommandLine/mdedit" "$APP/Contents/Helpers/mdedit"
 printf 'APPL????' > "$APP/Contents/PkgInfo"
 
 # The build number is the commit count, so every release build is higher.
@@ -69,6 +73,7 @@ SIGN=(codesign --force --sign "$IDENTITY")
 if [ "$IDENTITY" != "-" ]; then
 	SIGN+=(--options runtime --timestamp)
 fi
+"${SIGN[@]}" --identifier com.mdedit.MdEdit.mdedit "$APP/Contents/Helpers/mdedit"
 "${SIGN[@]}" --entitlements "$ROOT/Resources/QuickLook/MdEditQuickLook.entitlements" "$APPEX"
 if [ "$SANDBOX" = 1 ]; then
 	"${SIGN[@]}" --entitlements "$ROOT/Resources/MdEdit-Sandbox.entitlements" "$APP"

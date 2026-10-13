@@ -67,7 +67,7 @@ jobs:
 
       - name: Build the app and the disk image
         run: |
-          Scripts/make-app.sh release
+          Scripts/make-app.sh release --sandbox
           Scripts/make-dmg.sh | tee build/checksum.txt
 
       - name: Publish the release

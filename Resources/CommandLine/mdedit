@@ -1,0 +1,92 @@
+#!/bin/sh
+# The mdedit command, installed as MdEdit.app/Contents/Helpers/mdedit.
+#
+#   mdedit --render [file | -] [-o out.html] [options]   converts to HTML
+#   mdedit [file…]                                        opens files in the app
+#
+# The app is sandboxed, so it cannot open a path it is merely given. This
+# script, running as you, opens the files you name and hands them over as
+# standard input and output; the markdown is parsed and rendered inside the
+# sandbox. It never evaluates its arguments: they are only passed along.
+set -eu
+
+self=$(realpath -- "$0")
+app=${self%/Contents/Helpers/*}
+binary="$app/Contents/MacOS/MdEdit"
+if [ "$app" = "$self" ] || [ ! -x "$binary" ]; then
+	echo "mdedit: cannot find MdEdit.app around $self" >&2
+	exit 1
+fi
+
+fail() {
+	echo "mdedit: $1" >&2
+	exit 2
+}
+
+if [ "${1-}" != "--render" ]; then
+	# Launch Services hands the app the files, with access to them.
+	if [ "$#" -eq 0 ]; then exec open -a "$app"; fi
+	exec open -a "$app" -- "$@"
+fi
+shift
+
+# Takes out the input and the output, and passes every other argument on.
+input=
+output=
+count=$#
+while [ "$count" -gt 0 ]; do
+	argument=$1
+	shift
+	count=$((count - 1))
+	case $argument in
+		-o | --output)
+			[ "$count" -gt 0 ] || fail "$argument needs a value"
+			output=$1
+			shift
+			count=$((count - 1))
+			;;
+		--theme | --base)
+			[ "$count" -gt 0 ] || fail "$argument needs a value"
+			set -- "$@" "$argument" "$1"
+			shift
+			count=$((count - 1))
+			;;
+		-h | --help)
+			exec "$binary" --render --help
+			;;
+		-)
+			[ -z "$input" ] || fail "one input file at a time"
+			input=-
+			;;
+		-*)
+			set -- "$@" "$argument"
+			;;
+		*)
+			[ -z "$input" ] || fail "one input file at a time"
+			input=$argument
+			;;
+	esac
+done
+
+if [ -z "$input" ] || [ "$input" = - ]; then
+	input=/dev/stdin
+	base="$PWD/stdin.md"
+else
+	[ -f "$input" ] || fail "no such file: $input"
+	[ -r "$input" ] || fail "cannot read $input"
+	base=$(realpath -- "$input")
+fi
+
+if [ -z "$output" ]; then
+	exec "$binary" --render - --base "$base" "$@" <"$input"
+fi
+
+# Written beside the output and moved into place, so a failed render leaves
+# any existing file as it was.
+temporary=$(mktemp "$(dirname -- "$output")/.mdedit.XXXXXX")
+trap 'rm -f -- "$temporary"' EXIT
+"$binary" --render - --base "$base" "$@" <"$input" >"$temporary"
+# mktemp makes the file private; give it the permissions a new file gets.
+chmod "$(printf '%o' $((0666 & ~$(umask))))" "$temporary"
+mv -f -- "$temporary" "$output"
+trap - EXIT

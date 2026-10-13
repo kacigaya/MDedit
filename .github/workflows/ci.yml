@@ -33,4 +33,4 @@ jobs:
         run: Scripts/lint.sh
 
       - name: Assemble the app
-        run: Scripts/make-app.sh release
+        run: Scripts/make-app.sh release --sandbox

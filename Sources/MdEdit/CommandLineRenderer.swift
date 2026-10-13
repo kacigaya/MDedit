@@ -6,8 +6,8 @@ import MarkdownKit
 @MainActor
 enum CommandLineRenderer {
     static let usage = """
-    usage: MdEdit --render [file | -] [--output file] [--standalone] [--theme name]
-                           [--toc] [--number-headings] [--embed-images]
+    usage: mdedit --render [file | -] [--output file] [--standalone] [--theme name]
+                           [--toc] [--number-headings] [--embed-images] [--base path]
 
     Renders markdown to HTML. Reads standard input when the file is - or left out.
 
@@ -17,6 +17,8 @@ enum CommandLineRenderer {
       --toc                add a table of contents
       --number-headings    number headings 1, 1.1, 1.2…
       --embed-images       put local images in the page as data: URIs
+      --base path          where the markdown lives, for relative links and the
+                           title, when it comes on standard input
 
     """
 
@@ -28,6 +30,10 @@ enum CommandLineRenderer {
         var tableOfContents = false
         var numberHeadings = false
         var embedImages = false
+        /// The document's own path, standing in for the input's. The
+        /// sandboxed app reads standard input from the `mdedit` script, and
+        /// its working directory is its container, not the shell's.
+        var base: String?
     }
 
     enum Failure: LocalizedError, Equatable {
@@ -56,6 +62,7 @@ enum CommandLineRenderer {
             case "--toc": invocation.tableOfContents = true
             case "--number-headings": invocation.numberHeadings = true
             case "--embed-images": invocation.embedImages = true
+            case "--base": invocation.base = try value(for: argument)
             case "-h", "--help": throw Failure.usage("")
             case "-": invocation.input = nil
             default:
@@ -91,16 +98,17 @@ enum CommandLineRenderer {
         do {
             let invocation = try parse(arguments)
             let markdown: String
-            let baseURL: URL?
+            var baseURL: URL?
             if let input = invocation.input {
                 let url = URL(fileURLWithPath: input)
                 markdown = try FileFormat.decode(Data(contentsOf: url)).text
                 baseURL = url
             } else {
-                markdown = String(decoding: FileHandle.standardInput.readDataToEndOfFile(), as: UTF8.self)
+                markdown = try FileFormat.decode(FileHandle.standardInput.readDataToEndOfFile()).text
                 // Relative images resolve against where the command runs.
                 baseURL = URL(fileURLWithPath: FileManager.default.currentDirectoryPath).appendingPathComponent("stdin.md")
             }
+            if let base = invocation.base { baseURL = URL(fileURLWithPath: base) }
             let html = render(markdown, invocation: invocation, baseURL: baseURL)
             if let output = invocation.output {
                 try html.write(to: URL(fileURLWithPath: output), atomically: true, encoding: .utf8)

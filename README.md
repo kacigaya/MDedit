@@ -86,9 +86,12 @@ markdown comes back. There is no split pane and no preview mode to switch to.
   [Pandoc](https://pandoc.org) installed, export also writes EPUB, ODT, LaTeX,
   Typst and more. Copy as HTML or as rich text for Mail and Pages. A `[TOC]`
   paragraph becomes a table of contents in export.
-- **Command line.** `MdEdit --render [file | -] [-o out.html] [--standalone]
-  [--theme Nord] [--toc] [--number-headings] [--embed-images]` converts without
-  opening a window, reading standard input when no file is given.
+- **Command line.** `mdedit --render [file | -] [-o out.html] [--standalone]
+  [--theme Nord] [--toc] [--number-headings]` converts without opening a
+  window, reading standard input when no file is given; `mdedit file.md` opens
+  it in the app. The command is `MdEdit.app/Contents/Helpers/mdedit`, which
+  Homebrew puts on your path. The app itself is sandboxed, so `--embed-images`
+  only works for an app built without `--sandbox`.
 - **At home in macOS.** MdEdit is the default editor for markdown files, with
   its own document icon; the space bar previews them in Finder through its Quick
   Look extension. VoiceOver reads the text as it is drawn — no stray `**` or
