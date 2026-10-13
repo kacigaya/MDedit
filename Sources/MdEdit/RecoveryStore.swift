@@ -24,17 +24,28 @@ struct RecoveryStore {
         directory.appendingPathComponent("\(id.uuidString).json")
     }
 
+    /// Writes go one after another, off the main thread: each encodes and
+    /// writes a whole document, every few seconds while someone types.
+    /// Everything else waits for them, so a removal is never overtaken.
+    private static let queue = DispatchQueue(label: "MdEdit.RecoveryStore", qos: .utility)
+
     func write(_ snapshot: Snapshot) throws {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         try JSONEncoder().encode(snapshot).write(to: file(for: snapshot.id), options: .atomic)
     }
 
+    /// Writes a snapshot in the background.
+    func writeLater(_ snapshot: Snapshot) {
+        Self.queue.async { try? write(snapshot) }
+    }
+
     func remove(id: UUID) {
-        try? FileManager.default.removeItem(at: file(for: id))
+        Self.queue.sync { try? FileManager.default.removeItem(at: file(for: id)) }
     }
 
     /// Every snapshot on disk; unreadable files are skipped.
     func snapshots() -> [Snapshot] {
+        Self.queue.sync {}
         let files = (try? FileManager.default.contentsOfDirectory(
             at: directory, includingPropertiesForKeys: [.contentModificationDateKey]
         )) ?? []
@@ -45,7 +56,7 @@ struct RecoveryStore {
     }
 
     func removeAll() {
-        try? FileManager.default.removeItem(at: directory)
+        Self.queue.sync { try? FileManager.default.removeItem(at: directory) }
     }
 
     private func modificationDate(_ url: URL) -> Date {

@@ -103,14 +103,30 @@ final class Document {
         guard let url else { return }
         watcher = FileWatcher(url: url) { [weak self] in
             guard let self, !isSavingSelf else { return }
-            onExternalChange?()
+            // A writer sends several events for one save; answer the last.
+            pendingExternalChange?.cancel()
+            let change = DispatchWorkItem { [weak self] in
+                guard let self, !isSavingSelf else { return }
+                onExternalChange?()
+            }
+            pendingExternalChange = change
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.15, execute: change)
         }
     }
+
+    private var pendingExternalChange: DispatchWorkItem?
 
     /// Re-reads the file, discarding whatever is in the editor.
     func revert() throws {
         guard let url else { return }
         let (text, format) = try FileFormat.decode(Data(contentsOf: url))
+        // Touched, or rewritten as it was (a sync, a checkout): reloading
+        // would restyle the whole document for nothing.
+        if text == savedText, !isDirty {
+            self.format = format
+            isMissingOnDisk = false
+            return
+        }
         storage.replaceCharacters(in: NSRange(location: 0, length: storage.length), with: text)
         savedText = text
         self.format = format
@@ -200,7 +216,7 @@ final class Document {
 
     private func recordVersion(_ text: String) {
         guard let url, VersionHistory.isWorthKeeping(url) else { return }
-        try? history.record(text, for: url)
+        history.recordLater(text, for: url)
     }
 
     /// Counts for the status bar, kept until the text next changes.

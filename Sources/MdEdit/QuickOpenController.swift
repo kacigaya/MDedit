@@ -9,14 +9,26 @@ final class QuickOpenController: NSObject {
     private let panel: NSPanel
     private let field = NSSearchField()
     private let table = NSTableView()
-    private var candidates: [Candidate] = []
+    private var candidates: [Candidate] = [] {
+        didSet { lastFilter = nil }
+    }
     private var shown: [Candidate] = []
     private var loadTask: Task<Void, Never>?
+    /// The last query and which candidates it matched: a query that only
+    /// adds letters can match nothing outside them.
+    private var lastFilter: (needle: [Character], matches: [Int])?
 
     private struct Candidate {
         var url: URL
         /// What the query is matched against and shown under the name.
         var display: String
+        let prepared: FuzzyMatcher.Prepared?
+
+        init(url: URL, display: String) {
+            self.url = url
+            self.display = display
+            prepared = FuzzyMatcher.Prepared(display)
+        }
     }
 
     static let resultLimit = 50
@@ -128,15 +140,25 @@ final class QuickOpenController: NSObject {
     }
 
     private func filter() {
-        let query = field.stringValue
-        if query.isEmpty {
+        let needle = FuzzyMatcher.needle(field.stringValue)
+        if needle.isEmpty {
+            lastFilter = nil
             shown = Array(candidates.prefix(Self.resultLimit))
         } else {
-            shown = candidates
-                .compactMap { candidate in FuzzyMatcher.score(query, in: candidate.display).map { (candidate, $0) } }
-                .sorted { $0.1 > $1.1 }
+            let pool = lastFilter.flatMap { last in needle.starts(with: last.needle) ? last.matches : nil }
+                ?? Array(candidates.indices)
+            var scored: [(index: Int, score: Int)] = []
+            for index in pool {
+                guard let prepared = candidates[index].prepared,
+                      let score = FuzzyMatcher.score(needle, in: prepared) else { continue }
+                scored.append((index, score))
+            }
+            lastFilter = (needle, scored.map(\.index).sorted())
+            // Equal scores keep the candidates' order, as before.
+            shown = scored
+                .sorted { $0.score != $1.score ? $0.score > $1.score : $0.index < $1.index }
                 .prefix(Self.resultLimit)
-                .map(\.0)
+                .map { candidates[$0.index] }
         }
         table.reloadData()
         if !shown.isEmpty { table.selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false) }

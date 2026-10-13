@@ -45,12 +45,24 @@ struct VersionHistory {
         return formatter
     }()
 
+    /// Where copies are written, one after another and off the main thread:
+    /// each reads the newest copy back and writes a whole file.
+    private static let queue = DispatchQueue(label: "MdEdit.VersionHistory", qos: .utility)
+
+    /// Records a copy in the background.
+    func recordLater(_ text: String, for file: URL, at date: Date = Date()) {
+        Self.queue.async { try? record(text, for: file, at: date) }
+    }
+
     /// Keeps a copy of a file's text, unless it matches the newest copy.
     func record(_ text: String, for file: URL, at date: Date = Date()) throws {
         let folder = directory(for: file)
         if let newest = versions(for: file).first, (try? String(contentsOf: newest.url, encoding: .utf8)) == text { return }
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-        try file.standardizedFileURL.path.write(to: folder.appendingPathComponent("path.txt"), atomically: true, encoding: .utf8)
+        let note = folder.appendingPathComponent("path.txt")
+        if !FileManager.default.fileExists(atPath: note.path) {
+            try file.standardizedFileURL.path.write(to: note, atomically: true, encoding: .utf8)
+        }
         let name = Self.formatter.string(from: date) + ".md"
         try text.write(to: folder.appendingPathComponent(name), atomically: true, encoding: .utf8)
         for old in versions(for: file).dropFirst(limit) {
@@ -71,6 +83,8 @@ struct VersionHistory {
 
     /// MdEdit's copies and those macOS keeps, newest first.
     func allVersions(for file: URL) -> [Version] {
+        // Copies still being written are listed too.
+        Self.queue.sync {}
         let system = (NSFileVersion.otherVersionsOfItem(at: file) ?? []).compactMap { version in
             version.modificationDate.map { Version(date: $0, url: version.url, isSystemVersion: true) }
         }

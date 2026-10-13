@@ -61,31 +61,45 @@ struct Workspace: Equatable, Sendable {
 /// comes first: matches in the file name beat matches in folders, and
 /// characters that start words or run together beat scattered ones.
 enum FuzzyMatcher {
-    /// A score, higher is better, or nil when the query is not a subsequence.
-    static func score(_ query: String, in candidate: String) -> Int? {
-        let needle = Array(query.lowercased().filter { !$0.isWhitespace })
-        guard !needle.isEmpty else { return 0 }
-        let haystack = Array(candidate)
-        let lowered = Array(candidate.lowercased())
-        guard lowered.count == haystack.count else { return nil }
-        let nameStart = (candidate.lastIndex(of: "/").map { candidate.distance(from: candidate.startIndex, to: $0) + 1 }) ?? 0
+    /// A candidate made ready once, so each keystroke only scores it.
+    struct Prepared {
+        fileprivate let haystack: [Character]
+        fileprivate let lowered: [Character]
+        fileprivate let nameStart: Int
 
-        // Matching greedily from the left can spend letters on folder names;
-        // matching within the file name alone often scores better.
-        let fromPath = score(needle, haystack, lowered, from: 0, nameStart: nameStart)
-        let fromName = nameStart > 0 ? score(needle, haystack, lowered, from: nameStart, nameStart: nameStart) : nil
-        guard let best = [fromPath, fromName].compactMap({ $0 }).max() else { return nil }
-        // Prefer shorter paths among equal matches.
-        return best * 100 - haystack.count
+        /// Nil when lowercasing changes the length, which never matches.
+        init?(_ candidate: String) {
+            haystack = Array(candidate)
+            lowered = Array(candidate.lowercased())
+            guard lowered.count == haystack.count else { return nil }
+            nameStart = (haystack.lastIndex(of: "/")).map { $0 + 1 } ?? 0
+        }
     }
 
-    private static func score(
-        _ needle: [Character],
-        _ haystack: [Character],
-        _ lowered: [Character],
-        from start: Int,
-        nameStart: Int
-    ) -> Int? {
+    /// The query as matched: lowercased, without spaces.
+    static func needle(_ query: String) -> [Character] {
+        Array(query.lowercased().filter { !$0.isWhitespace })
+    }
+
+    /// A score, higher is better, or nil when the query is not a subsequence.
+    static func score(_ query: String, in candidate: String) -> Int? {
+        let needle = needle(query)
+        guard !needle.isEmpty else { return 0 }
+        return Prepared(candidate).flatMap { score(needle, in: $0) }
+    }
+
+    static func score(_ needle: [Character], in candidate: Prepared) -> Int? {
+        guard !needle.isEmpty else { return 0 }
+        // Matching greedily from the left can spend letters on folder names;
+        // matching within the file name alone often scores better.
+        guard let fromPath = score(needle, candidate, from: 0) else { return nil }
+        let fromName = candidate.nameStart > 0 ? score(needle, candidate, from: candidate.nameStart) : nil
+        // Prefer shorter paths among equal matches.
+        return max(fromPath, fromName ?? fromPath) * 100 - candidate.haystack.count
+    }
+
+    private static func score(_ needle: [Character], _ candidate: Prepared, from start: Int) -> Int? {
+        let haystack = candidate.haystack, lowered = candidate.lowered
         var score = 0
         var index = start
         var previousMatch = -2
@@ -94,7 +108,7 @@ enum FuzzyMatcher {
             score += 1
             if found == previousMatch + 1 { score += 6 }  // runs together
             if found == 0 || isBoundary(haystack[found - 1], before: haystack[found]) { score += 8 }  // starts a word
-            if found >= nameStart { score += 4 }  // in the file name
+            if found >= candidate.nameStart { score += 4 }  // in the file name
             previousMatch = found
             index = found + 1
         }

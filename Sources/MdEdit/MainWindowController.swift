@@ -446,13 +446,45 @@ final class MainWindowController: NSWindowController {
     }
 
     /// Counts for the selected text, if any.
+    ///
+    /// Every selection change asks. The whole text has the document's own
+    /// counts, the same selection is counted once, and while a large one is
+    /// being extended the last count stands until the selection settles.
     private func selectionStatistics() -> TextStatistics? {
-        guard let editor = currentEditor else { return nil }
+        guard let editor = currentEditor, let document = activeDocument else { return nil }
         let ranges = editor.textView.selectedRanges.map(\.rangeValue).filter { $0.length > 0 }
         guard !ranges.isEmpty else { return nil }
-        let text = editor.storage.string as NSString
+        let generation = editor.storage.editGeneration
+        let cached = selectionCount.flatMap { $0.editor == ObjectIdentifier(editor) ? $0 : nil }
+        if let cached, cached.ranges == ranges, cached.generation == generation { return cached.value }
+        if ranges.count == 1, ranges[0].length == editor.storage.length { return document.statistics() }
+
+        let length = ranges.reduce(0) { $0 + $1.length }
+        if length > Self.largeSelection, let stale = cached?.value {
+            pendingSelectionCount?.cancel()
+            let work = DispatchWorkItem { [weak self] in
+                guard let self, currentEditor === editor else { return }
+                selectionCount = (ObjectIdentifier(editor), ranges, generation, countSelection(ranges, in: editor))
+                updateStatus()
+            }
+            pendingSelectionCount = work
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2, execute: work)
+            return stale
+        }
+        let value = countSelection(ranges, in: editor)
+        selectionCount = (ObjectIdentifier(editor), ranges, generation, value)
+        return value
+    }
+
+    private func countSelection(_ ranges: [NSRange], in editor: EditorViewController) -> TextStatistics {
+        let text = editor.storage.text
         return TextStatistics(ranges.map { text.substring(with: $0) }.joined(separator: "\n"))
     }
+
+    /// UTF-16 units past which a selection is counted once it settles.
+    private static let largeSelection = 100_000
+    private var selectionCount: (editor: ObjectIdentifier, ranges: [NSRange], generation: Int, value: TextStatistics)?
+    private var pendingSelectionCount: DispatchWorkItem?
 
     private lazy var statisticsController: StatisticsViewController = {
         let controller = StatisticsViewController()
@@ -877,7 +909,7 @@ final class MainWindowController: NSWindowController {
             let state = Document.SnapshotState(generation: document.storage.editGeneration, url: document.url)
             if document.isDirty {
                 guard rewriting || document.snapshotState != state else { continue }
-                try? recovery.write(.init(id: document.id, url: document.url, text: document.text))
+                recovery.writeLater(.init(id: document.id, url: document.url, text: document.text))
                 document.snapshotState = state
             } else if rewriting || document.snapshotState != nil {
                 recovery.remove(id: document.id)

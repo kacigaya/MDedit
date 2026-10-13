@@ -140,3 +140,27 @@ struct DocumentTests {
         #expect(FileManager.default.fileExists(atPath: url.path))
     }
 }
+
+@MainActor
+@Suite("Reverting")
+struct RevertTests {
+    /// A sync or a checkout rewrites files as they were; reloading those
+    /// would restyle the whole document for nothing.
+    @Test("A file rewritten unchanged is not reloaded; a changed one is")
+    func unchangedRewrite() throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("MdEditRevert-\(UUID().uuidString).md")
+        try "# Notes\n".write(to: url, atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(at: url) }
+        let document = try Document.open(contentsOf: url, theme: .light)
+        let generation = document.storage.editGeneration
+
+        try "# Notes\n".write(to: url, atomically: true, encoding: .utf8)
+        try document.revert()
+        #expect(document.storage.editGeneration == generation)
+
+        try "# Changed\n".write(to: url, atomically: true, encoding: .utf8)
+        try document.revert()
+        #expect(document.text == "# Changed\n")
+        #expect(!document.isDirty)
+    }
+}
