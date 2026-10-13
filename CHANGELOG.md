@@ -5,6 +5,13 @@ workflow publishes the section for a version as its release notes.
 
 ## [Unreleased]
 
+## [1.0.1] - 2026-10-13
+
+### Fixed
+- The disk image installs with Homebrew on macOS 27. The 1.0.0 image had a
+  flaw that macOS 27's `hdiutil` rejects as corrupt; the app inside is
+  unchanged.
+
 ## [1.0.0] - 2026-10-13
 
 The App Sandbox, and a round of security fixes.
