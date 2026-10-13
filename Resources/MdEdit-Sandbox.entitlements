@@ -15,5 +15,14 @@
 	<true/>
 	<key>com.apple.security.print</key>
 	<true/>
+	<!-- Pandoc, for export to Word, EPUB and the rest: where Homebrew and
+	     MacPorts install it, read-only. Pandoc links Homebrew's libraries,
+	     so the whole prefix is needed, not only its own files. -->
+	<key>com.apple.security.temporary-exception.files.absolute-path.read-only</key>
+	<array>
+		<string>/opt/homebrew/</string>
+		<string>/usr/local/</string>
+		<string>/opt/local/</string>
+	</array>
 </dict>
 </plist>

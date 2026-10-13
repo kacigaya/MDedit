@@ -127,8 +127,19 @@ struct ExportTests {
     @Test("Pandoc is driven with the chosen writer and the document's folder")
     func pandocArguments() {
         let format = Pandoc.formats.first { $0.writer == "epub" }!
-        let arguments = Pandoc.arguments(for: format, output: URL(fileURLWithPath: "/tmp/out.epub"), resourceDirectory: URL(fileURLWithPath: "/docs"), tableOfContents: true)
-        #expect(arguments == ["--from", "markdown", "--to", "epub", "--standalone", "--output", "/tmp/out.epub", "--resource-path", "/docs", "--toc"])
+        let arguments = Pandoc.arguments(for: format, resourceDirectory: URL(fileURLWithPath: "/docs"), tableOfContents: true)
+        #expect(arguments == ["--from", "markdown", "--to", "epub", "--standalone", "--output", "-", "--resource-path", "/docs", "--toc"])
+    }
+
+    @Test("Pandoc's output comes back to the app to write", .enabled(if: Pandoc.executable != nil))
+    func pandocConvert() async throws {
+        let word = Pandoc.formats.first { $0.writer == "docx" }!
+        let data = try await Pandoc.convert(markdown: "# Hi\n", to: word, executable: Pandoc.executable!, resourceDirectory: nil, tableOfContents: false)
+        #expect(data.starts(with: Array("PK".utf8)))  // a zip, as .docx is
+        let folder = URL(fileURLWithPath: "/nonexistent-\(UUID().uuidString)")
+        let org = Pandoc.formats.first { $0.writer == "org" }!
+        let text = try await Pandoc.convert(markdown: "# Hi\n", to: org, executable: Pandoc.executable!, resourceDirectory: folder, tableOfContents: false)
+        #expect(String(decoding: text, as: UTF8.self).contains("* Hi"))
     }
 
     @Test("The command line takes a file or stdin, an output and page options")

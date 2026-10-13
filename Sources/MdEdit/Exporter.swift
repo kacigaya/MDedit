@@ -429,11 +429,10 @@ enum Exporter {
             try await Pandoc.convert(
                 markdown: document.text,
                 to: chosen,
-                output: url,
                 executable: pandoc,
                 resourceDirectory: document.url?.deletingLastPathComponent(),
                 tableOfContents: options.tableOfContents
-            )
+            ).write(to: url, options: .atomic)
         }
     }
 
@@ -776,30 +775,38 @@ enum Pandoc {
         return candidates.first(where: FileManager.default.isExecutableFile(atPath:)).map(URL.init(fileURLWithPath:))
     }
 
-    static func arguments(for format: Format, output: URL, resourceDirectory: URL?, tableOfContents: Bool) -> [String] {
-        var arguments = ["--from", "markdown", "--to", format.writer, "--standalone", "--output", output.path]
+    /// The document goes to standard output, and the app writes the file:
+    /// Pandoc runs inside the app's sandbox, without the access the save
+    /// panel gave the app to where the file goes.
+    static func arguments(for format: Format, resourceDirectory: URL?, tableOfContents: Bool) -> [String] {
+        var arguments = ["--from", "markdown", "--to", format.writer, "--standalone", "--output", "-"]
         if let resourceDirectory { arguments += ["--resource-path", resourceDirectory.path] }
         if tableOfContents { arguments.append("--toc") }
         return arguments
     }
 
+    /// The converted document's bytes.
     static func convert(
         markdown: String,
         to format: Format,
-        output: URL,
         executable: URL,
         resourceDirectory: URL?,
         tableOfContents: Bool
-    ) async throws {
+    ) async throws -> Data {
         let process = Process()
         process.executableURL = executable
-        process.arguments = arguments(for: format, output: output, resourceDirectory: resourceDirectory, tableOfContents: tableOfContents)
-        if let resourceDirectory { process.currentDirectoryURL = resourceDirectory }
+        process.arguments = arguments(for: format, resourceDirectory: resourceDirectory, tableOfContents: tableOfContents)
+        // A folder the sandbox does not reach would stop Pandoc launching;
+        // without it, images there are left out rather than the export failing.
+        if let resourceDirectory, FileManager.default.isReadableFile(atPath: resourceDirectory.path) {
+            process.currentDirectoryURL = resourceDirectory
+        }
         let input = Pipe()
+        let output = Pipe()
         let errors = Pipe()
         process.standardInput = input
         process.standardError = errors
-        process.standardOutput = FileHandle.nullDevice
+        process.standardOutput = output
 
         let exited = AsyncStream<Int32> { continuation in
             process.terminationHandler = { process in
@@ -816,11 +823,15 @@ enum Pandoc {
             try? writer.close()
         }
         let reader = errors.fileHandleForReading
+        let result = output.fileHandleForReading
+        async let document = Task.detached { result.readDataToEndOfFile() }.value
         let message = await Task.detached { String(decoding: reader.readDataToEndOfFile(), as: UTF8.self) }.value
+        let bytes = await document
         var status: Int32 = -1
         for await code in exited { status = code }
         guard status == 0 else {
             throw Failure.failed(message.trimmingCharacters(in: .whitespacesAndNewlines))
         }
+        return bytes
     }
 }
