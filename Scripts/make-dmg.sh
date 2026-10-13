@@ -35,6 +35,8 @@ TEXT
 fi
 rm -f "$DMG"
 hdiutil create -volname "MdEdit $VERSION" -srcfolder "$STAGING" -fs HFS+ -format UDZO -ov "$DMG" >/dev/null
+# Some hdiutil versions write an image newer ones reject; mend it before signing.
+python3 -I "$ROOT/Scripts/fix-dmg.py" "$DMG" >&2
 
 if [ -n "${MDEDIT_SIGN_IDENTITY:-}" ]; then
 	codesign --force --timestamp --sign "$MDEDIT_SIGN_IDENTITY" "$DMG"

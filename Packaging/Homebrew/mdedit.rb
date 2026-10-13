@@ -2,9 +2,10 @@
 # Casks/mdedit.rb:
 #   brew install msk-mdi/tap/mdedit
 # It installs the release's disk image into /Applications and links the
-# mdedit command, a script that hands files to the sandboxed app. MdEdit is not notarized (that takes a paid Apple developer
-# account), so the cask clears the quarantine flag the download leaves on the
-# app, and it opens without Gatekeeper's prompt.
+# mdedit command, a script that hands files to the sandboxed app. MdEdit is
+# not notarized (that takes a paid Apple developer account), so the cask
+# clears the quarantine flag the download leaves on the app, and it opens
+# without Gatekeeper's prompt.
 # For each release, set version and the DMG's sha256 (make-dmg.sh prints it).
 cask "mdedit" do
   version "0.9.3"
