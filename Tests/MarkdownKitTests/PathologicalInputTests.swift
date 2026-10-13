@@ -84,9 +84,11 @@ struct PathologicalInputTests {
         let footnotes = Self.seconds(
             (0..<20_000).map { "a[^\($0)]" }.joined(separator: " ") + "\n\n" + (0..<20_000).map { "[^\($0)]: x" }.joined(separator: "\n")
         )
-        #expect(setext < 3, "\(setext) s")
-        #expect(definitions < 3, "\(definitions) s")
-        #expect(footnotes < 3, "\(footnotes) s")
+        // About 1 s each on a Mac, 4–5 on a CI runner: the limit is there to catch
+        // quadratic slowdowns, not to time the machine.
+        #expect(setext < 10, "\(setext) s")
+        #expect(definitions < 10, "\(definitions) s")
+        #expect(footnotes < 10, "\(footnotes) s")
     }
 
     /// A floor on where openers are searched for was kept as an index into
