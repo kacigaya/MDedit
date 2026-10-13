@@ -114,7 +114,9 @@ public struct HTMLRenderer {
     private final class Context {
         let references: LinkReferences
         /// Footnote labels in order of first reference; the index is the number.
-        var footnoteOrder: [String] = []
+        private(set) var footnoteOrder: [String] = []
+        /// Each label's place in `footnoteOrder`, counting from 1.
+        private var footnoteNumbers: [String: Int] = [:]
         var footnoteReferenceCounts: [String: Int] = [:]
         var footnoteBodies: [String: String] = [:]
         /// Heading ids, matching `BlockStructure.headings` so `#anchors` agree.
@@ -133,8 +135,14 @@ public struct HTMLRenderer {
         /// The footnote's number, and this reference's id.
         func reference(to label: String) -> (number: Int, id: String) {
             let key = normalizeLabel(label)
-            if !footnoteOrder.contains(key) { footnoteOrder.append(key) }
-            let number = footnoteOrder.firstIndex(of: key)! + 1
+            let number: Int
+            if let known = footnoteNumbers[key] {
+                number = known
+            } else {
+                footnoteOrder.append(key)
+                number = footnoteOrder.count
+                footnoteNumbers[key] = number
+            }
             let count = footnoteReferenceCounts[key, default: 0] + 1
             footnoteReferenceCounts[key] = count
             return (number, count == 1 ? "fnref-\(number)" : "fnref-\(number)-\(count)")
@@ -165,7 +173,7 @@ public struct HTMLRenderer {
         case .paragraph:
             let tight = block.parent.map(isInTightList) ?? false
             var content = block.content.trimmingCharacters(in: .whitespacesAndNewlines)
-            if tableOfContents, content.uppercased() == "[TOC]" {
+            if tableOfContents, content.utf8.count == 5, content.uppercased() == "[TOC]" {
                 writer.cr()
                 writer.write(tableOfContentsHTML(context))
                 writer.cr()
@@ -308,11 +316,17 @@ public struct HTMLRenderer {
     }
 
     private func table(_ rows: [String], alignments: [ColumnAlignment], _ context: Context) -> String {
+        // Empty cells filled in are limited to about the table's own size: a
+        // wide header over many short rows otherwise turns kilobytes into
+        // megabytes, as it did in cmark-gfm.
+        var fillBudget = max(1_000, rows.reduce(0) { $0 + $1.utf8.count })
         func row(_ line: String, cell: String) -> String {
             var cells = MarkdownTable.cells(of: line)
             // A row has as many cells as the header: extra ones go, missing ones are empty.
             if cells.count > alignments.count { cells = Array(cells.prefix(alignments.count)) }
-            cells += Array(repeating: "", count: max(0, alignments.count - cells.count))
+            let fill = min(max(0, alignments.count - cells.count), fillBudget)
+            fillBudget -= fill
+            cells += Array(repeating: "", count: fill)
             var out = "<tr>\n"
             for (column, text) in cells.enumerated() {
                 let style = switch alignments[column] {
@@ -645,11 +659,14 @@ public struct HTMLRenderer {
         }
     }
 
+    private static let hexDigits = Array("0123456789ABCDEF".utf8)
+    private static let urlSafe = Set("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789;/?:@&=+$,-_.!~*'()#".utf8)
+
     /// Percent-encodes what a URL may not contain, leaving existing `%XX`
     /// escapes and URL punctuation alone, as the reference renderer does.
     private func normalizeURL(_ url: String, image: Bool = false) -> String {
         if Self.isUnsafeURL(url, image: image) { return "" }
-        let safe = Set("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789;/?:@&=+$,-_.!~*'()#".utf8)
+        let safe = Self.urlSafe
         let bytes = Array(url.utf8)
         var out = ""
         var index = 0
@@ -664,7 +681,9 @@ public struct HTMLRenderer {
             if safe.contains(byte) {
                 out.append(Character(Unicode.Scalar(byte)))
             } else {
-                out += String(format: "%%%02X", byte)
+                out.unicodeScalars.append("%")
+                out.unicodeScalars.append(Unicode.Scalar(Self.hexDigits[Int(byte >> 4)]))
+                out.unicodeScalars.append(Unicode.Scalar(Self.hexDigits[Int(byte & 0xF)]))
             }
             index += 1
         }
@@ -677,18 +696,30 @@ public struct HTMLRenderer {
             || (UInt8(ascii: "A")...UInt8(ascii: "F")).contains(byte)
     }
 
+    /// All exported text passes through here, so it works on bytes: most
+    /// text has nothing to escape and comes back as it was, and the rest is
+    /// copied a run at a time.
     private func escape(_ value: String) -> String {
-        var out = ""
-        out.reserveCapacity(value.count)
-        for character in value {
-            switch character {
-            case "&": out += "&amp;"
-            case "<": out += "&lt;"
-            case ">": out += "&gt;"
-            case "\"": out += "&quot;"
-            default: out.append(character)
+        var value = value
+        return value.withUTF8 { bytes in
+            guard let first = bytes.firstIndex(where: Self.needsEscape) else { return String(decoding: bytes, as: UTF8.self) }
+            var out = [UInt8]()
+            out.reserveCapacity(bytes.count + 16)
+            out.append(contentsOf: bytes[..<first])
+            for byte in bytes[first...] {
+                switch byte {
+                case UInt8(ascii: "&"): out.append(contentsOf: "&amp;".utf8)
+                case UInt8(ascii: "<"): out.append(contentsOf: "&lt;".utf8)
+                case UInt8(ascii: ">"): out.append(contentsOf: "&gt;".utf8)
+                case UInt8(ascii: "\""): out.append(contentsOf: "&quot;".utf8)
+                default: out.append(byte)
+                }
             }
+            return String(decoding: out, as: UTF8.self)
         }
-        return out
+    }
+
+    private static func needsEscape(_ byte: UInt8) -> Bool {
+        byte == UInt8(ascii: "&") || byte == UInt8(ascii: "<") || byte == UInt8(ascii: ">") || byte == UInt8(ascii: "\"")
     }
 }

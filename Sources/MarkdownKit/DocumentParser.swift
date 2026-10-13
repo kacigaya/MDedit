@@ -97,15 +97,48 @@ final class Block {
         children.append(child)
     }
 
+    /// How many blocks this one is inside.
+    var depth: Int {
+        var count = 0
+        var walker = parent
+        while let block = walker {
+            count += 1
+            walker = block.parent
+        }
+        return count
+    }
+
+    // The block removed or inserted after is almost always the last child,
+    // the paragraph just closed: searching every sibling for it made a long
+    // run of setext headings or tables quadratic.
+
     func remove() {
-        parent?.children.removeAll { $0 === self }
+        if let parent, parent.children.last === self {
+            parent.children.removeLast()
+        } else if let parent, parent.children.count >= 2, parent.children[parent.children.count - 2] === self {
+            // Just replaced by the block now after it.
+            parent.children.remove(at: parent.children.count - 2)
+        } else {
+            parent?.children.removeAll { $0 === self }
+        }
         parent = nil
     }
 
+    /// Puts `block` where this one is, and takes this one out.
+    func replace(with block: Block) {
+        block.insertAfter(self)
+        remove()
+    }
+
     func insertAfter(_ sibling: Block) {
-        guard let parent = sibling.parent, let index = parent.children.firstIndex(where: { $0 === sibling }) else { return }
+        guard let parent = sibling.parent else { return }
+        if parent.children.last === sibling {
+            parent.children.append(self)
+        } else {
+            guard let index = parent.children.firstIndex(where: { $0 === sibling }) else { return }
+            parent.children.insert(self, at: index + 1)
+        }
         self.parent = parent
-        parent.children.insert(self, at: index + 1)
     }
 }
 
@@ -139,6 +172,8 @@ final class DocumentParser {
     private var partiallyConsumedTab = false
 
     private static let codeIndent = 4
+    /// How deep blocks nest: a quote or list item counts one, a list one more.
+    static let maxDepth = 100
 
     init(extensions: SyntaxExtensions = .all) {
         self.extensions = extensions
@@ -166,7 +201,15 @@ final class DocumentParser {
         index < line.count ? line[index] : nil
     }
 
+    /// Each open container asks for this as the line passes through it, so
+    /// the last answer is kept until the offset moves past it, as cmark
+    /// does: rescanning the indentation each time made nested lists cubic.
     private func findNextNonspace() {
+        guard nextNonspace <= offset else {
+            indent = nextNonspaceColumn - column
+            indented = indent >= Self.codeIndent
+            return
+        }
         var index = offset
         var columns = column
         while index < line.count {
@@ -257,6 +300,8 @@ final class DocumentParser {
         lineNumber += 1
         offset = 0
         column = 0
+        nextNonspace = 0
+        nextNonspaceColumn = 0
         blank = false
         partiallyConsumedTab = false
         oldTip = tip
@@ -281,12 +326,20 @@ final class DocumentParser {
 
         // 2. Does it start new blocks?
         var matchedLeaf = !container.isParagraph && container.acceptsLines
+        var depth = container.depth
         while !matchedLeaf {
             findNextNonspace()
+            // Past a sane depth the rest is text: the tree is torn down and
+            // rendered recursively, and `>>>>…` would overflow the stack.
+            if depth >= Self.maxDepth {
+                advanceNextNonspace()
+                break
+            }
             var started = false
             for start in starts {
                 let result = start(self, container)
                 if result == .container {
+                    depth = tip.depth
                     container = tip
                     started = true
                     break
@@ -530,8 +583,7 @@ final class DocumentParser {
         table.rows = [header]
         paragraphLines.removeLast()
         if paragraphLines.isEmpty {
-            table.insertAfter(container)
-            container.remove()
+            container.replace(with: table)
         } else {
             container.content = paragraphLines.joined(separator: "\n") + "\n"
             finalize(container)
@@ -550,8 +602,7 @@ final class DocumentParser {
         guard !container.content.isEmpty else { return .none }
         let heading = Block(.heading(level: level), line: container.startLine)
         heading.content = container.content
-        heading.insertAfter(container)
-        container.remove()
+        container.replace(with: heading)
         tip = heading
         offset = line.count
         return .leaf
@@ -706,22 +757,25 @@ final class DocumentParser {
 
     /// Takes definitions off the front of a paragraph, recording each.
     private func stripReferenceDefinitions(from paragraph: Block) {
-        var characters = Array(paragraph.content.utf16)
-        while characters.first == UInt16(ascii: "["),
-              let definition = referenceDefinition(characters) {
+        let characters = Array(paragraph.content.utf16)
+        // A cursor, not a copy of what is left after each definition.
+        var start = 0
+        while start < characters.count, characters[start] == UInt16(ascii: "["),
+              let definition = referenceDefinition(characters, at: start) {
             let key = normalizeLabel(definition.label)
             if references.links[key] == nil {
                 references.links[key] = LinkDefinition(destination: definition.destination, title: definition.title)
             }
-            characters = Array(characters[definition.end...])
+            start = definition.end
         }
-        paragraph.content = String(decoding: characters, as: UTF16.self)
+        guard start > 0 else { return }
+        paragraph.content = String(decoding: characters[start...], as: UTF16.self)
     }
 
-    /// `[label]: destination "title"`, possibly across lines, at the start.
-    private func referenceDefinition(_ characters: [UInt16]) -> (label: String, destination: String, title: String?, end: Int)? {
+    /// `[label]: destination "title"`, possibly across lines, at `start`.
+    private func referenceDefinition(_ characters: [UInt16], at start: Int) -> (label: String, destination: String, title: String?, end: Int)? {
         let limit = characters.count
-        guard let label = parseLinkLabel(characters, at: 0, limit: limit),
+        guard let label = parseLinkLabel(characters, at: start, limit: limit),
               isValidLabel(label.label), !label.label.hasPrefix("^"),
               label.end < limit, characters[label.end] == UInt16(ascii: ":")
         else { return nil }

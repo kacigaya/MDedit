@@ -77,6 +77,17 @@ public indirect enum InlineNode: Equatable, Sendable {
         }
     }
 
+    /// How deep the tree under this node goes, counting it, up to `limit`.
+    func depth(limit: Int) -> Int {
+        guard limit > 1 else { return 1 }
+        var deepest = 0
+        for child in children {
+            deepest = max(deepest, child.depth(limit: limit - 1))
+            if deepest >= limit - 1 { break }
+        }
+        return deepest + 1
+    }
+
     public var children: [InlineNode] {
         switch self {
         case let .emphasis(_, _, children): children
@@ -194,6 +205,9 @@ private struct Parser {
     }
 
     private var extensions: SyntaxExtensions { references.extensions }
+
+    /// How deep emphasis nests.
+    static let maxDepth = 100
 
     private var pieces: [Piece] = []
     private var brackets: [Bracket] = []
@@ -537,6 +551,8 @@ private struct Parser {
         }
 
         var openersBottom: [OpenerKey: Int] = [:]
+        // Where the last node too deep to wrap again ends: no opener before it may match.
+        var tooDeepEnd = Int.min
         var closerIndex = firstDelimiter
         while closerIndex >= 0 {
             let index = closerIndex
@@ -574,19 +590,40 @@ private struct Parser {
             default: closer.length >= 2 && opener.length >= 2 ? 2 : 1
             }
             let openMarker = opener.start + opener.length - count
-            // The pieces between become the node's children, and leave the list.
-            var inner: [Piece] = []
-            var cursor = next[found]
-            while cursor != index {
-                inner.append(items[cursor])
-                cursor = next[cursor]
+            // Past a sane depth both runs stay literal: the tree is torn down
+            // and rendered recursively, and `**a **a …` would overflow the stack.
+            // A pair around a node already too deep to wrap is refused without
+            // gathering what is between, or refusing would be quadratic.
+            var children: [InlineNode] = []
+            var tooDeep = opener.start < tooDeepEnd
+            if !tooDeep {
+                // The pieces between become the node's children, and leave the list.
+                var inner: [Piece] = []
+                var cursor = next[found]
+                while cursor != index {
+                    inner.append(items[cursor])
+                    cursor = next[cursor]
+                }
+                children = nodes(inner)
+                if let deep = children.first(where: { $0.depth(limit: Self.maxDepth) >= Self.maxDepth }) {
+                    tooDeep = true
+                    tooDeepEnd = NSMaxRange(deep.range)
+                }
+            }
+            if tooDeep {
+                items[found] = .text(opener.start, opener.start + opener.length)
+                unlinkDelimiter(found)
+                items[index] = .text(closer.start, closer.start + closer.length)
+                closerIndex = nextDelimiter[index]
+                unlinkDelimiter(index)
+                continue
             }
             let node = emphasisNode(
                 character: closer.character,
                 count: count,
                 range: NSRange(location: openMarker, length: closerCopy.start + count - openMarker),
                 markers: [marker(openMarker, count), marker(closerCopy.start, count)],
-                children: nodes(inner)
+                children: children
             )
             opener.length -= count
             closerCopy.start += count

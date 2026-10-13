@@ -417,34 +417,36 @@ func isURLBoundary(_ character: UInt16) -> Bool {
         || character == UInt16(ascii: "=")
 }
 
+private let bareURLPrefixes = ["https://", "http://", "www."].map { Array($0.utf16) }
+private let bareURLTrailing = Set("?!.,:;*_~'\"=".utf16)
+
 /// GFM's extended autolinks: `https://…`, `http://…` and `www.…` without
 /// angle brackets. Trailing punctuation and unbalanced `)` stay outside.
 func parseBareURL(_ characters: [UInt16], at index: Int, limit: Int) -> InlineMatch? {
-    let prefixes = ["https://", "http://", "www."]
-    guard let prefix = prefixes.first(where: { prefix in
-        let units = Array(prefix.utf16)
-        return index + units.count <= limit && Array(characters[index..<(index + units.count)]) == units
+    guard let prefix = bareURLPrefixes.first(where: { units in
+        index + units.count <= limit && characters[index..<(index + units.count)].elementsEqual(units)
     }) else { return nil }
-    let bodyStart = index + prefix.utf16.count
+    let bodyStart = index + prefix.count
 
     var end = bodyStart
     while end < limit, !isUnicodeWhitespace(characters[end]), characters[end] != UInt16(ascii: "<") { end += 1 }
 
-    let trailing = Set("?!.,:;*_~'\"=".utf16)
+    // Parentheses are counted once and kept up to date as the end moves
+    // in: counted afresh for each `)`, a run of them took quadratic time.
+    var opens = 0, closes = 0
+    for character in characters[index..<end] {
+        if character == UInt16(ascii: "(") { opens += 1 } else if character == UInt16(ascii: ")") { closes += 1 }
+    }
     while end > bodyStart {
         let last = characters[end - 1]
-        if trailing.contains(last) {
+        if bareURLTrailing.contains(last) {
             end -= 1
             continue
         }
-        if last == UInt16(ascii: ")") {
-            let span = characters[index..<end]
-            let opens = span.filter { $0 == UInt16(ascii: "(") }.count
-            let closes = span.filter { $0 == UInt16(ascii: ")") }.count
-            if closes > opens {
-                end -= 1
-                continue
-            }
+        if last == UInt16(ascii: ")"), closes > opens {
+            closes -= 1
+            end -= 1
+            continue
         }
         break
     }
@@ -455,7 +457,7 @@ func parseBareURL(_ characters: [UInt16], at index: Int, limit: Int) -> InlineMa
         node: .autolink(
             range: NSRange(location: index, length: end - index),
             markers: [],
-            url: prefix == "www." ? "http://" + text : text
+            url: prefix == bareURLPrefixes[2] ? "http://" + text : text
         ),
         end: end
     )

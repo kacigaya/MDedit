@@ -197,11 +197,13 @@ public enum SyntaxHighlighter {
 
 // MARK: - Scanners
 
+/// Asked at nearly every position of every code line, so it compares in
+/// place rather than copying the marker into an array each time.
 private func matches(_ line: [UInt16], at index: Int, text: String) -> Bool {
-    let units = Array(text.utf16)
-    guard index + units.count <= line.count else { return false }
-    for offset in units.indices where line[index + offset] != units[offset] {
-        return false
+    var cursor = index
+    for unit in text.utf16 {
+        guard cursor < line.count, line[cursor] == unit else { return false }
+        cursor += 1
     }
     return true
 }
