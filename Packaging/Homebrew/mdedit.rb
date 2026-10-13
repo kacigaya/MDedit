@@ -32,9 +32,9 @@ cask "mdedit" do
   end
 
   zap trash: [
+    "~/Library/Application Support/MdEdit",
     "~/Library/Containers/com.mdedit.MdEdit",
     "~/Library/Containers/com.mdedit.MdEdit.QuickLook",
-    "~/Library/Application Support/MdEdit",
     "~/Library/Preferences/com.mdedit.MdEdit.plist",
     "~/Library/Saved Application State/com.mdedit.MdEdit.savedState",
   ]
