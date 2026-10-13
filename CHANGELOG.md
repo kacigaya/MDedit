@@ -5,6 +5,19 @@ workflow publishes the section for a version as its release notes.
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-10-13
+
+The App Sandbox, and a round of security fixes.
+
+### Breaking
+- MdEdit now runs in the App Sandbox, which keeps its data in
+  `~/Library/Containers/com.mdedit.MdEdit`. Settings, custom themes, version
+  history and the last session from 0.9 are not carried over. To keep your
+  themes, copy them from `~/Library/Application Support/MdEdit/Themes` to
+  `~/Library/Containers/com.mdedit.MdEdit/Data/Library/Application Support/MdEdit/Themes`.
+- `mdedit --render` can no longer `--embed-images`: the sandboxed app cannot
+  read the images.
+
 ### Security
 - Release builds run in the App Sandbox. The `mdedit` command is now a small
   script, `MdEdit.app/Contents/Helpers/mdedit`, that opens the files it is
