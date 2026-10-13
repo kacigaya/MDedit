@@ -208,4 +208,29 @@ struct WindowFlowTests {
         controller.reopenClosedTab(nil)
         #expect(controller.activeDocument?.url == first.url)
     }
+
+    @Test("Restoring a session makes an editor only for the tab it shows, and keeps the rest as saved")
+    func restoreIsLazy() throws {
+        try FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: true)
+        let tabs = try (0..<3).map { index -> Session.Tab in
+            let url = scratch.appendingPathComponent("restored\(index).md")
+            try String(repeating: "line\n", count: 50).write(to: url, atomically: true, encoding: .utf8)
+            return Session.Tab(url: url, selectedLocation: 10 * (index + 1), sourceMode: index == 2, typewriterMode: nil, focusMode: nil)
+        }
+        let controller = makeWindow()
+        controller.restore(Session.Window(tabs: tabs, selectedIndex: 1, workspace: nil, frame: nil))
+        #expect(controller.documents.map(\.url) == tabs.map(\.url))
+        #expect(controller.activeDocument?.url == tabs[1].url)
+        #expect(controller.editorCount == 1)
+        // Tabs not shown yet go back into the session as they came.
+        let session = controller.windowSession()
+        #expect(session.selectedIndex == 1)
+        #expect(session.tabs.map(\.selectedLocation) == [10, 20, 30])
+        #expect(session.tabs[2].sourceMode == true)
+
+        controller.select(index: 2)
+        #expect(controller.editorCount == 2)
+        #expect(controller.windowSession().tabs[2].selectedLocation == 30)
+        #expect(controller.windowSession().tabs[2].sourceMode == true)
+    }
 }

@@ -6,7 +6,13 @@ import MarkdownKit
 @MainActor
 final class MainWindowController: NSWindowController {
     private(set) var documents: [Document] = []
+    /// Made the first time a tab is shown: restoring a session would
+    /// otherwise build, lay out and scroll an editor for every tab.
     private var editors: [ObjectIdentifier: EditorViewController] = [:]
+    /// Caret and modes for tabs restored but not shown yet.
+    private var pendingTabs: [ObjectIdentifier: Session.Tab] = [:]
+    /// How many tabs have an editor yet.
+    var editorCount: Int { editors.count }
     private var selection = 0
     /// Files whose tabs were closed, most recent last, for Reopen Closed Tab.
     private var closedTabURLs: [URL] = []
@@ -179,12 +185,19 @@ final class MainWindowController: NSWindowController {
         documents.indices.contains(selection) ? documents[selection] : nil
     }
 
-    func addDocument(_ document: Document) {
+    func addDocument(_ document: Document, selecting: Bool = true) {
         document.onExternalChange = { [weak self, weak document] in
             guard let self, let document else { return }
             handleExternalChange(of: document)
         }
         documents.append(document)
+        if selecting { select(index: documents.count - 1) }
+        refreshTabs()
+    }
+
+    /// The document's editor, made now if its tab has not been shown yet.
+    private func editor(for document: Document) -> EditorViewController {
+        if let editor = editors[ObjectIdentifier(document)] { return editor }
         let editor = EditorViewController(textStorage: document.storage, undoManager: document.undoManager)
         editor.applyTheme(theme)
         editor.onSelectionChange = { [weak self] in
@@ -205,8 +218,10 @@ final class MainWindowController: NSWindowController {
             self?.scheduleOutlineRefresh()
         }
         editors[ObjectIdentifier(document)] = editor
-        select(index: documents.count - 1)
-        refreshTabs()
+        if let tab = pendingTabs.removeValue(forKey: ObjectIdentifier(document)) {
+            restore(tab, in: editor, of: document)
+        }
+        return editor
     }
 
     /// Brings an already-open file forward instead of opening it twice.
@@ -224,7 +239,7 @@ final class MainWindowController: NSWindowController {
         guard documents.indices.contains(index) else { return }
         selection = index
         let document = documents[index]
-        guard let editor = editors[ObjectIdentifier(document)] else { return }
+        let editor = editor(for: document)
 
         if currentEditor !== editor {
             let isSwitch = currentEditor != nil
@@ -289,8 +304,9 @@ final class MainWindowController: NSWindowController {
     }
 
     /// Takes a document out of this window without asking about changes;
-    /// the window closes once it has nothing left.
-    private func remove(_ document: Document) {
+    /// the window closes once it has nothing left. Keeping the selection
+    /// leaves the tab shown alone when another goes.
+    private func remove(_ document: Document, keepingSelection: Bool = false) {
         // Looked up afresh: tabs may have moved while a sheet was up.
         guard let index = documents.firstIndex(where: { $0 === document }) else { return }
         if let editor = editors.removeValue(forKey: ObjectIdentifier(document)) {
@@ -301,9 +317,14 @@ final class MainWindowController: NSWindowController {
             }
             editor.detachFromStorage()
         }
+        pendingTabs.removeValue(forKey: ObjectIdentifier(document))
+        let shown = activeDocument
         documents.remove(at: index)
         if documents.isEmpty {
             window?.close()
+        } else if keepingSelection, let shown, shown !== document, let kept = documents.firstIndex(where: { $0 === shown }) {
+            selection = kept
+            refreshTabs()
         } else {
             select(index: min(index, documents.count - 1))
         }
@@ -488,7 +509,7 @@ final class MainWindowController: NSWindowController {
     /// Adds a document; an untouched empty tab is replaced rather than left behind.
     private func addReplacingPlaceholder(_ document: Document) {
         addDocument(document)
-        if let index = documents.firstIndex(where: { $0 !== document && $0.url == nil && !$0.isDirty && $0.text.isEmpty }) {
+        if let index = documents.firstIndex(where: { $0 !== document && $0.url == nil && !$0.isDirty && $0.storage.length == 0 }) {
             closeDocument(at: index)
             if let added = documents.firstIndex(where: { $0 === document }) { select(index: added) }
         }
@@ -649,7 +670,8 @@ final class MainWindowController: NSWindowController {
 
     /// Puts the caret at the start of a line and brings it into view.
     private func moveCaret(toLine line: Int, in document: Document) {
-        guard let editor = editors[ObjectIdentifier(document)], line < document.storage.structure.lineCount else { return }
+        guard line < document.storage.structure.lineCount else { return }
+        let editor = editor(for: document)
         let range = NSRange(location: document.storage.structure.index.range(ofLine: line).location, length: 0)
         editor.textView.setSelectedRange(range)
         editor.textView.scrollRangeToVisible(range)
@@ -883,13 +905,19 @@ final class MainWindowController: NSWindowController {
         for (index, document) in documents.enumerated() {
             guard let url = document.url else { continue }
             if index == selection { selectedIndex = tabs.count }
-            let editor = editors[ObjectIdentifier(document)]
+            guard let editor = editors[ObjectIdentifier(document)] else {
+                // Never shown this session: as it was restored.
+                var tab = pendingTabs[ObjectIdentifier(document)] ?? .init(url: url, selectedLocation: 0)
+                tab.url = url
+                tabs.append(tab)
+                continue
+            }
             tabs.append(.init(
                 url: url,
-                selectedLocation: editor?.textView.selectedRange().location ?? 0,
-                sourceMode: editor?.sourceMode,
-                typewriterMode: editor?.activeLine.typewriterMode,
-                focusMode: editor?.activeLine.focusMode
+                selectedLocation: editor.textView.selectedRange().location,
+                sourceMode: editor.sourceMode,
+                typewriterMode: editor.activeLine.typewriterMode,
+                focusMode: editor.activeLine.focusMode
             ))
         }
         return Session.Window(
@@ -907,24 +935,34 @@ final class MainWindowController: NSWindowController {
         if let root = saved.workspace, FileManager.default.fileExists(atPath: root.path) {
             setWorkspace(Workspace(root: root))
         }
+        // An untouched empty tab gives way, once another is showing: closed
+        // first, it would show the next tab, and make its editor, on the way.
+        let placeholder = documents.first { $0.url == nil && !$0.isDirty && $0.storage.length == 0 }
         var selected: Document?
+        var restoredLast: Document?
         for (index, tab) in saved.tabs.enumerated() {
             let document = documents.first(where: { $0.url == tab.url })
                 ?? (try? Document.open(contentsOf: tab.url, theme: theme)).map { opened in
-                    addReplacingPlaceholder(opened)
+                    addDocument(opened, selecting: false)
                     return opened
                 }
             guard let document else { continue }
             if index == saved.selectedIndex { selected = document }
-            restoreCaret(of: document, to: tab.selectedLocation)
+            restoredLast = document
+            // Applied when the tab is first shown, or now if it already has been.
             if let editor = editors[ObjectIdentifier(document)] {
-                if let source = tab.sourceMode { editor.sourceMode = source }
-                if let typewriter = tab.typewriterMode { editor.activeLine.typewriterMode = typewriter }
-                if let focus = tab.focusMode { editor.activeLine.focusMode = focus }
+                restore(tab, in: editor, of: document)
+            } else {
+                pendingTabs[ObjectIdentifier(document)] = tab
             }
         }
-        if let selected, let index = documents.firstIndex(where: { $0 === selected }) {
+        // The saved tab, or the last one restored if that has gone.
+        if let selected = selected ?? restoredLast, let index = documents.firstIndex(where: { $0 === selected }) {
             select(index: index)
+        }
+        if let placeholder, restoredLast != nil, documents.contains(where: { $0 === placeholder }), !placeholder.isDirty {
+            remove(placeholder, keepingSelection: true)
+            recovery.remove(id: placeholder.id)
         }
         refreshTabs()
     }
@@ -955,9 +993,11 @@ final class MainWindowController: NSWindowController {
         refreshTabs()
     }
 
-    private func restoreCaret(of document: Document, to location: Int) {
-        guard let editor = editors[ObjectIdentifier(document)] else { return }
-        let range = NSRange(location: min(location, document.storage.length), length: 0)
+    private func restore(_ tab: Session.Tab, in editor: EditorViewController, of document: Document) {
+        if let source = tab.sourceMode { editor.sourceMode = source }
+        if let typewriter = tab.typewriterMode { editor.activeLine.typewriterMode = typewriter }
+        if let focus = tab.focusMode { editor.activeLine.focusMode = focus }
+        let range = NSRange(location: min(tab.selectedLocation, document.storage.length), length: 0)
         editor.textView.setSelectedRange(range)
         // Wait for layout so the scroll lands on the caret's real position.
         DispatchQueue.main.async { editor.textView.scrollRangeToVisible(range) }
@@ -1119,8 +1159,7 @@ final class MainWindowController: NSWindowController {
     }
 
     private func replaceText(of document: Document, with text: String, actionName: String) {
-        guard let editor = editors[ObjectIdentifier(document)] else { return }
-        let textView = editor.textView
+        let textView = editor(for: document).textView
         let all = NSRange(location: 0, length: document.storage.length)
         document.storage.unfoldAll()
         guard textView.replaceAsUndoStep(all, with: text, actionName: actionName) else { return }
