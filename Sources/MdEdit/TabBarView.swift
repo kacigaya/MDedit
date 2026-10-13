@@ -169,7 +169,10 @@ final class TabBarView: NSView {
             thumb.alphaValue = 1
             track.layoutSubtreeIfNeeded()
         } completionHandler: {
-            for segment in removed { segment.removeFromSuperview() }
+            // AppKit calls it on the main thread, though its type does not say so.
+            MainActor.assumeIsolated {
+                for segment in removed { segment.removeFromSuperview() }
+            }
         }
     }
 
