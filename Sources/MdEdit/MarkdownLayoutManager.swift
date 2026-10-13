@@ -203,7 +203,7 @@ final class MarkdownLayoutManager: NSLayoutManager {
         guard let storage = textStorage as? MarkdownTextStorage, line < storage.structure.lineCount,
               let container = textContainers.first
         else { return nil }
-        let content = storage.structure.index.contentRange(ofLine: line, in: storage.string as NSString)
+        let content = storage.structure.index.contentRange(ofLine: line, in: storage.text)
         let last = max(content.location, NSMaxRange(content) - 1)
         guard last < storage.length else { return nil }
         let glyphs = glyphRange(forCharacterRange: NSRange(location: last, length: 1), actualCharacterRange: nil)
@@ -229,16 +229,27 @@ final class MarkdownLayoutManager: NSLayoutManager {
     /// A fragment's characters start after any concealed glyphs, so the
     /// paragraph's first fragment is the one with only concealed text before it.
     private func isFirstFragmentOfParagraph(_ location: Int, in storage: NSTextStorage) -> Bool {
-        let start = (storage.string as NSString).paragraphRange(for: NSRange(location: location, length: 0)).location
-        for index in start..<location where storage.attribute(.mdConcealed, at: index, effectiveRange: nil) == nil {
-            return false
+        let start = Self.text(of: storage).paragraphRange(for: NSRange(location: location, length: 0)).location
+        // Run by run, not character by character: a long wrapped paragraph
+        // asks this once per fragment.
+        var index = start
+        while index < location {
+            var run = NSRange()
+            guard storage.attribute(.mdConcealed, at: index, longestEffectiveRange: &run, in: NSRange(location: index, length: location - index)) != nil
+            else { return false }
+            index = NSMaxRange(run)
         }
         return true
     }
 
     private func isLastFragmentOfParagraph(_ lineCharacters: NSRange, in storage: NSTextStorage) -> Bool {
-        let paragraph = (storage.string as NSString).paragraphRange(for: NSRange(location: lineCharacters.location, length: 0))
+        let paragraph = Self.text(of: storage).paragraphRange(for: NSRange(location: lineCharacters.location, length: 0))
         return NSMaxRange(lineCharacters) >= NSMaxRange(paragraph)
+    }
+
+    /// The characters, without copying them out of a markdown storage.
+    private static func text(of storage: NSTextStorage) -> NSString {
+        (storage as? MarkdownTextStorage)?.text ?? storage.string as NSString
     }
 
     /// The glyph for a replacement character in a given font, cached.
@@ -306,7 +317,7 @@ extension MarkdownLayoutManager: NSLayoutManagerDelegate {
             // exactly as typed, only the glyphs change.
             // Fallbacks matter: not every font carries every box character.
             let candidates: [String] = switch kind {
-            case .listBullet: isBulletCharacter(storage.string, at: characterIndex) ? ["•"] : []
+            case .listBullet: isBulletCharacter(Self.text(of: storage), at: characterIndex) ? ["•"] : []
             case .taskChecked: ["☑", "✓", "•"]
             case .taskUnchecked: ["☐", "□", "▫", "◦"]
             default: []
@@ -330,8 +341,8 @@ extension MarkdownLayoutManager: NSLayoutManagerDelegate {
         return glyphRange.length
     }
 
-    private func isBulletCharacter(_ string: String, at index: Int) -> Bool {
-        let character = (string as NSString).character(at: index)
+    private func isBulletCharacter(_ text: NSString, at index: Int) -> Bool {
+        let character = text.character(at: index)
         return character == UInt16(UnicodeScalar("-").value)
             || character == UInt16(UnicodeScalar("*").value)
             || character == UInt16(UnicodeScalar("+").value)

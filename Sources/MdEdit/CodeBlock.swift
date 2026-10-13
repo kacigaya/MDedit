@@ -37,7 +37,7 @@ struct CodeBlock: Equatable {
         }
 
         // The info string follows the run of backticks or tildes.
-        let text = storage.string as NSString
+        let text = storage.text
         let characters = structure.characters(of: text, line: open)
         var start = 0
         while start < characters.count, characters[start] == 0x20 || characters[start] == 0x3E { start += 1 }  // spaces, `>`
@@ -53,7 +53,7 @@ struct CodeBlock: Equatable {
     @MainActor
     func code(in storage: MarkdownTextStorage) -> String {
         let structure = storage.structure
-        let text = storage.string as NSString
+        let text = storage.text
         let last = (closeLine ?? structure.lineCount) - 1
         guard last > openLine else { return "" }
         return ((openLine + 1)...last).compactMap { line -> String? in

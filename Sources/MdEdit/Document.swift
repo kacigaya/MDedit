@@ -67,7 +67,10 @@ final class Document {
 
     /// Contents as last read from or written to disk, used to detect dirtiness.
     private var savedText: String {
-        didSet { savedLength = (savedText as NSString).length }
+        didSet {
+            savedLength = (savedText as NSString).length
+            cachedDirtiness = nil
+        }
     }
     /// Comparing lengths first keeps the dirty check off the whole text
     /// for almost every keystroke.
@@ -125,9 +128,17 @@ final class Document {
         isMissingOnDisk = true
     }
 
+    /// Every open tab is asked on every keystroke, and an equal length means
+    /// comparing the whole text, so the answer is kept until the next edit.
     var isDirty: Bool {
-        isMissingOnDisk || storage.length != savedLength || storage.string != savedText
+        if isMissingOnDisk || storage.length != savedLength { return true }
+        if let cached = cachedDirtiness, cached.generation == storage.editGeneration { return cached.value }
+        let value = storage.string != savedText
+        cachedDirtiness = (storage.editGeneration, value)
+        return value
     }
+
+    private var cachedDirtiness: (generation: Int, value: Bool)?
 
     /// The tab title of a document with no file yet, when it should not be
     /// "Untitled": the welcome page, the cheat sheet.

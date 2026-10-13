@@ -131,6 +131,53 @@ struct PerformanceTests {
         #expect(timings.drawScreen < 250, "\(timings)")
     }
 
+    /// Typing as the text view does it, in a window of several tabs: the
+    /// input handler, the dirty check of every tab and the status all run
+    /// on each keystroke, and once each copied a whole document.
+    @Test("Typing through the text view with several tabs open stays local")
+    func typingInWindow() throws {
+        let controller = MainWindowController()
+        controller.recovery = RecoveryStore(directory: FileManager.default.temporaryDirectory.appendingPathComponent("MdEditPerformance-\(UUID().uuidString)"))
+        let text = Self.document(lines: 10_000)
+        for _ in 0..<5 { controller.openCopy(of: text, named: "Large") }
+        let textView = try #require(controller.window?.firstResponder as? NSTextView)
+        let start = (text as NSString).range(of: "Some prose", options: [], range: NSRange(location: text.utf16.count / 2, length: text.utf16.count / 2)).location
+        textView.setSelectedRange(NSRange(location: start, length: 0))
+        let typing = Int(ProcessInfo.processInfo.environment["MDEDIT_TYPING"] ?? "") ?? 20
+        let keystroke = Self.milliseconds {
+            for _ in 0..<typing {
+                textView.insertText("x", replacementRange: textView.selectedRange())
+            }
+            for _ in 0..<typing {
+                textView.deleteBackward(nil)
+            }
+        } / Double(2 * typing)
+        print("benchmark keystroke in a window of 5 tabs", String(format: "%.2f ms", keystroke))
+        #expect(controller.documents.count == 5)
+        #expect(keystroke < 25, "\(keystroke) ms")
+        controller.documents.forEach { $0.storage.replaceCharacters(in: NSRange(location: 0, length: $0.storage.length), with: "") }
+        controller.window?.close()
+    }
+
+    /// A fold once made every keystroke restyle from the edit down to the
+    /// last folded line.
+    @Test("Typing above a fold stays local")
+    func typingAboveFold() throws {
+        let storage = MarkdownTextStorage(theme: .light)
+        storage.replaceCharacters(in: NSRange(location: 0, length: 0), with: Self.document(lines: 10_000))
+        let last = try #require(storage.headings.last?.line)
+        storage.setFolded(true, headingLine: last)
+        let start = (storage.string as NSString).range(of: "Some prose").location
+        let keystroke = Self.milliseconds {
+            for offset in 0..<20 {
+                storage.replaceCharacters(in: NSRange(location: start + offset, length: 0), with: "x")
+            }
+        } / 20
+        print("benchmark keystroke above a fold", String(format: "%.2f ms", keystroke))
+        #expect(storage.foldedHeadings.count == 1)
+        #expect(keystroke < 25, "\(keystroke) ms")
+    }
+
     /// Opening a document, switching appearance and changing any setting all
     /// restyle every line. Done over the runs already there, that once grew
     /// with the square of the document: 42 s rather than 3 s at 4.5 MB.

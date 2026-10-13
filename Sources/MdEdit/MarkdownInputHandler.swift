@@ -50,7 +50,7 @@ struct MarkdownInputHandler {
         let line = storage.line(at: selection.location)
         guard let info = storage.structure.info(forLine: line) else { return false }
         let lineRange = storage.structure.index.range(ofLine: line)
-        let text = storage.string as NSString
+        let text = storage.text
         let characters = storage.structure.characters(of: text, line: line)
 
         // In code, a new line starts at the same indentation (and inside the same quote).
@@ -124,7 +124,7 @@ struct MarkdownInputHandler {
             return true
         }
 
-        let text = storage.string as NSString
+        let text = storage.text
         let start = storage.structure.index.range(ofLine: firstLine).location
         let end = NSMaxRange(storage.structure.index.range(ofLine: lastLine))
         let range = NSRange(location: start, length: end - start)
@@ -170,7 +170,7 @@ struct MarkdownInputHandler {
         }
         guard let closing = Self.pairs[input] else { return false }
 
-        let text = storage.string as NSString
+        let text = storage.text
         let selected = text.substring(with: range)
         let replacement = input + selected + closing
         textView.insertText(replacement, replacementRange: range)
@@ -179,7 +179,7 @@ struct MarkdownInputHandler {
     }
 
     private func handleTyping(_ input: String, in textView: NSTextView, at location: Int) -> Bool {
-        let text = storage.string as NSString
+        let text = storage.text
         let next: String? = location < text.length ? text.substring(with: NSRange(location: location, length: 1)) : nil
         let previous: String? = location > 0 ? text.substring(with: NSRange(location: location - 1, length: 1)) : nil
 
@@ -207,7 +207,7 @@ struct MarkdownInputHandler {
     private func deleteEmptyPair(in textView: NSTextView) -> Bool {
         let selection = textView.selectedRange()
         guard autoPairEnabled, selection.length == 0, selection.location > 0 else { return false }
-        let text = storage.string as NSString
+        let text = storage.text
         guard selection.location < text.length else { return false }
         let pairRange = NSRange(location: selection.location - 1, length: 2)
         let pair = text.substring(with: pairRange)

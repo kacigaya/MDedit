@@ -67,6 +67,45 @@ struct FoldingTests {
         #expect(!storage.isHidden(line: 3))
     }
 
+    /// Edits restyle only the lines whose folded state changed, and keep
+    /// the headings when they touch none. Through any edits, a line is
+    /// styled folded exactly when it is hidden, and the headings are the
+    /// ones a fresh look finds.
+    @Test("Folds and headings kept through edits stay true", arguments: [3, 4, 5])
+    func randomEdits(seed: UInt64) {
+        var random = SeededGenerator(state: seed)
+        let section = "# Top\nalpha **bold**\n\n## Sub\nbeta\n\nSetext\n---\ngamma\n\n"
+        let (storage, _, _) = makeStorage(String(repeating: section, count: 12))
+        let snippets = ["x", "\n", "# ", "## Head\n", "\n\n", "---\n", "**", "text\n"]
+        for step in 0..<300 {
+            // Keep a few sections folded as the text changes under them.
+            if step % 10 == 0 {
+                for heading in storage.headings.map(\.line) where Bool.random(using: &random) {
+                    storage.setFolded(true, headingLine: heading)
+                }
+            }
+            let length = storage.length
+            if Int.random(in: 0..<3, using: &random) == 0, length > 0 {
+                let location = Int.random(in: 0..<length, using: &random)
+                storage.replaceCharacters(in: NSRange(location: location, length: min(Int.random(in: 1...6, using: &random), length - location)), with: "")
+            } else {
+                let snippet = snippets.randomElement(using: &random)!
+                storage.replaceCharacters(in: NSRange(location: Int.random(in: 0...length, using: &random), length: 0), with: snippet)
+            }
+
+            #expect(storage.headings == storage.structure.headings(in: storage.string as NSString), "step \(step)")
+            for line in 0..<storage.structure.lineCount {
+                let range = storage.structure.index.range(ofLine: line)
+                guard range.length > 0 else { continue }
+                let folded = storage.attribute(.mdFolded, at: range.location, effectiveRange: nil) != nil
+                guard folded == storage.isHidden(line: line) else {
+                    Issue.record("line \(line) folded \(folded), hidden \(storage.isHidden(line: line)), step \(step)")
+                    return
+                }
+            }
+        }
+    }
+
     @Test("A heading that stops being one loses its fold")
     func headingRemoved() {
         let (storage, _, _) = makeStorage(document)
@@ -97,5 +136,14 @@ struct FoldingTests {
         #expect(document.storage.line(at: editor.textView.selectedRange().location) == 0)
         editor.unfoldAll()
         #expect(document.storage.foldedHeadings.isEmpty)
+    }
+}
+
+/// A deterministic generator, so a failure replays.
+private struct SeededGenerator: RandomNumberGenerator {
+    var state: UInt64
+    mutating func next() -> UInt64 {
+        state = state &* 6_364_136_223_846_793_005 &+ 1_442_695_040_888_963_407
+        return state ^ (state >> 33)
     }
 }

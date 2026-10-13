@@ -1,6 +1,6 @@
 import AppKit
 
-struct TabDescriptor {
+struct TabDescriptor: Equatable {
     /// Follows the document, so a tab keeps its segment as tabs come and go.
     var id: UUID
     var title: String
@@ -105,6 +105,8 @@ final class TabBarView: NSView {
     required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
 
     func setTabs(_ tabs: [TabDescriptor], selected: Int) {
+        // Typing asks on every keystroke; usually nothing has changed.
+        guard tabs != self.tabs || selected != selectedIndex || segments.count != tabs.count else { return }
         let oldIDs = segments.map(\.id)
         let reused = Dictionary(uniqueKeysWithValues: segments.map { ($0.id, $0) })
         let ids = Set(tabs.map(\.id))

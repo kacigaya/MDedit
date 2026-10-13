@@ -124,7 +124,7 @@ extension MarkdownTextView {
         let target = line + (below ? 1 : -1)
         guard target >= 0, target < storage.structure.lineCount else { return NSSound.beep() }
         let column = from - storage.structure.index.range(ofLine: line).location
-        let content = storage.structure.index.contentRange(ofLine: target, in: storage.string as NSString)
+        let content = storage.structure.index.contentRange(ofLine: target, in: storage.text)
         let location = content.location + min(column, content.length)
         additionalCarets = Array(Set(additionalCarets + [location]).subtracting([selectedRange().location])).sorted()
         scrollRangeToVisible(NSRange(location: location, length: 0))

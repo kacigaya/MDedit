@@ -202,6 +202,32 @@ final class MarkdownTextStorage: MDBackedTextStorage {
         refreshFolds(restyling: nil)
     }
 
+    /// The headings from before an edit, when it neither touched a heading
+    /// nor made one: those below it just move. Nil when they must be found
+    /// again, which means parsing every heading.
+    private func headingsKept(_ old: [Heading], reparsed: ClosedRange<Int>, lineDelta: Int) -> [Heading]? {
+        // A setext heading's title is the line above its underline, so the
+        // lines either side of the edit count too.
+        let low = reparsed.lowerBound - 1
+        let oldHigh = max(reparsed.lowerBound, reparsed.upperBound - lineDelta) + 1
+        if old.contains(where: { $0.line >= low && $0.line <= oldHigh }) { return nil }
+        let newHigh = min(structure.lineCount - 1, reparsed.upperBound + 1)
+        if max(0, low) <= newHigh {
+            for line in max(0, low)...newHigh {
+                switch structure.info(forLine: line)?.kind {
+                case .atxHeading?, .setextUnderline?: return nil
+                default: continue
+                }
+            }
+        }
+        guard lineDelta != 0 else { return old }
+        return old.map { heading in
+            var heading = heading
+            if heading.line > reparsed.lowerBound { heading.line += lineDelta }
+            return heading
+        }
+    }
+
     /// The outline number of the heading on a line, if it is one.
     func headingNumber(forLine line: Int) -> String? {
         if headingNumberCache == nil {
@@ -336,8 +362,9 @@ final class MarkdownTextStorage: MDBackedTextStorage {
         return copy
     }
 
-    /// The text, without the copy: valid until the next edit.
-    private var text: NSString { backing.mutableString }
+    /// The text without the copy `string` makes: live, so read it and let
+    /// it go before the next edit.
+    var text: NSString { backing.mutableString }
 
     // Length and attribute access, which TextKit calls run by run, are
     // answered by `MDBackedTextStorage` without crossing into Swift.
@@ -373,22 +400,33 @@ final class MarkdownTextStorage: MDBackedTextStorage {
                 editedRange: editedRange,
                 changeInLength: changeInLength
             )
+            let lineDelta = structure.lineCount - oldLineCount
             blockLookup = nil
             if structure.touchedDefinitions {
                 references = .collect(from: structure, requireDefinitions: false, extensions: extensions)
             }
             headingNumberCache = nil
-            cachedHeadings = nil
+            cachedHeadings = cachedHeadings.flatMap { headingsKept($0, reparsed: updated, lineDelta: lineDelta) }
             if !extents.isEmpty {
-                adjustFolds(extents: extents, lineDelta: structure.lineCount - oldLineCount)
+                adjustFolds(extents: extents, lineDelta: lineDelta)
             }
             // The line above takes its spacing from whether this one is blank.
             var lineRange = max(0, updated.lowerBound - 1)...updated.upperBound
             // Lines a fold hid or now hides restyle too; old lines past the
-            // end are clamped away.
-            let touchedFolds = hiddenLines.union(previouslyHidden)
-            if let first = touchedFolds.first, let last = touchedFolds.last {
-                lineRange = min(lineRange.lowerBound, first)...max(lineRange.upperBound, last)
+            // end are clamped away. Hidden lines below the edit moved with
+            // it, styling and all, so only lines whose state changed count:
+            // every hidden line made each keystroke restyle up to the last fold.
+            if !hiddenLines.isEmpty || !previouslyHidden.isEmpty {
+                // The lines the edit now spans, and where the old lines after it went.
+                let editStart = updated.lowerBound
+                let editEnd = max(editStart, line(at: NSMaxRange(editedRange)))
+                var shifted = previouslyHidden
+                shifted.shift(startingAt: editEnd - lineDelta + 1, by: lineDelta)
+                var changed = hiddenLines.symmetricDifference(shifted)
+                changed.insert(integersIn: editStart...editEnd)
+                if let first = changed.first, let last = changed.last {
+                    lineRange = min(lineRange.lowerBound, first)...max(lineRange.upperBound, last)
+                }
             }
             lineRange = clampedLineRange(lineRange) ?? lineRange
             // A formula or diagram is one image: editing a line of it redraws it all.
@@ -1079,7 +1117,6 @@ final class MarkdownTextStorage: MDBackedTextStorage {
     /// kerned to the formula's width; the layout manager draws the image
     /// there. The rest of its source is concealed.
     private func applyInlineMath(lineRange: NSRange) {
-        let text = backing.string as NSString
         var ascent: CGFloat = 0, descent: CGFloat = 0
         for (range, rendering) in pendingInlineMath {
             guard range.length > 1, NSMaxRange(range) <= backing.length else { continue }
