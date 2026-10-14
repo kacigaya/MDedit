@@ -197,7 +197,9 @@ struct PerformanceTests {
     /// it out, for a view not on screen yet: 9.6 s at 4.5 MB.
     @Test("Opening an editor lays out only what it shows")
     func editorSetupIsLazy() {
-        let document = Document(text: Self.document(lines: 30_000), theme: .light)
+        // In the theme the editor will pick, as the app makes documents: a
+        // dark Mac would otherwise time restyling the whole document too.
+        let document = Document(text: Self.document(lines: 30_000), theme: .current(for: NSApplication.shared.effectiveAppearance))
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 900, height: 700), styleMask: [.titled], backing: .buffered, defer: true)
         let setup = Self.milliseconds {
             window.contentViewController = EditorViewController(textStorage: document.storage, undoManager: document.undoManager)

@@ -134,7 +134,8 @@ struct MarkdownTextStorageTests {
 
     @Test("Putting a document in an editor keeps its styling")
     func editorKeepsStyling() throws {
-        let document = Document(text: "Intro.\n\nSome **bold** and `code`.\n", theme: .light)
+        // In the theme the editor will pick, light or dark as the Mac is.
+        let document = Document(text: "Intro.\n\nSome **bold** and `code`.\n", theme: .current(for: NSApplication.shared.effectiveAppearance))
         let storage = document.storage
         let whole = NSRange(location: 0, length: storage.length)
         let styled = storage.attributedSubstring(from: whole)
