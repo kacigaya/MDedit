@@ -125,4 +125,30 @@ struct KeyboardInputTests {
         harness.type("let x = 1")
         #expect(harness.document.text == "```swift\nlet x = 1\n```")
     }
+
+    /// ⌥` starts a dead key showing a marked backtick, which was paired, and
+    /// over a selection wrapped it; the composed character then doubled up.
+    @Test("Composing a character with a dead key neither pairs nor wraps")
+    func deadKeyComposition() {
+        let harness = Harness("word here")
+        let view = harness.editor.textView
+        view.setSelectedRange(NSRange(location: 0, length: 4))
+        view.setMarkedText("`", selectedRange: NSRange(location: 1, length: 0), replacementRange: NSRange(location: NSNotFound, length: 0))
+        #expect(harness.document.text == "` here")
+        view.insertText("è", replacementRange: NSRange(location: NSNotFound, length: 0))
+        #expect(harness.document.text == "è here")
+        #expect(!view.hasMarkedText())
+
+        view.setSelectedRange(NSRange(location: 1, length: 0))
+        view.setMarkedText("`", selectedRange: NSRange(location: 1, length: 0), replacementRange: NSRange(location: NSNotFound, length: 0))
+        #expect(harness.document.text == "è` here")
+    }
+
+    @Test("A line selected by triple-click is the only one a line command changes")
+    func tripleClickedLine() {
+        let harness = Harness("first\nsecond\n")
+        harness.editor.textView.setSelectedRange(NSRange(location: 0, length: 6))
+        harness.editor.setHeading(level: 1)
+        #expect(harness.document.text == "# first\nsecond\n")
+    }
 }

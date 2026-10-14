@@ -112,7 +112,7 @@ struct MarkdownInputHandler {
     private func changeIndent(by direction: Int, in textView: NSTextView) -> Bool {
         let selection = textView.selectedRange()
         let firstLine = storage.line(at: selection.location)
-        let lastLine = storage.line(at: NSMaxRange(selection))
+        let lastLine = storage.lastLine(of: selection)
 
         var isList = false
         for line in firstLine...lastLine {

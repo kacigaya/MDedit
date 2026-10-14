@@ -25,6 +25,24 @@ struct PathologicalInputTests {
         #expect(time < 1, "\(time) s")
     }
 
+    /// A backslash in the search for a closer kept it from being
+    /// remembered, so every `$` searched to the end again.
+    @Test("Unclosed math with escapes in it")
+    func unclosedMathWithEscapes() {
+        let time = Self.seconds(String(repeating: "$\\x ", count: 20_000))
+        #expect(time < 1, "\(time) s")
+        #expect(HTMLRenderer().render(markdown: "$\\x $a\\$b$").contains("class=\"math"))
+    }
+
+    /// Each delimiter row under a paragraph split the whole paragraph to
+    /// find its last line, even when the cell counts could not match.
+    @Test("Delimiter rows that never match the line above")
+    func unmatchedTableDelimiters() {
+        let time = Self.seconds(String(repeating: "|-|\n|-|-|\n", count: 10_000))
+        #expect(time < 1, "\(time) s")
+        #expect(HTMLRenderer().render(markdown: "Intro\nline\na | b\n-|-\n1 | 2\n").hasPrefix("<p>Intro\nline</p>\n<table>"))
+    }
+
     @Test("Long runs of emphasis", arguments: ["*a* ", "*a", "_a_ "])
     func emphasis(_ unit: String) {
         let time = Self.seconds(String(repeating: unit, count: 50_000))

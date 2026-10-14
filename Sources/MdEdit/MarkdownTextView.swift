@@ -27,6 +27,16 @@ final class MarkdownTextView: NSTextView {
     /// one-character replacement for a typed delimiter.
     fileprivate(set) var isReplacingAsCommand = false
 
+    /// Set while an input method shows text it is still composing, as a
+    /// dead key or an IME does: that is not typing a delimiter either.
+    private(set) var isSettingMarkedText = false
+
+    override func setMarkedText(_ string: Any, selectedRange: NSRange, replacementRange: NSRange) {
+        isSettingMarkedText = true
+        defer { isSettingMarkedText = false }
+        super.setMarkedText(string, selectedRange: selectedRange, replacementRange: replacementRange)
+    }
+
     override func setSelectedRanges(_ ranges: [NSValue], affinity: NSSelectionAffinity, stillSelecting: Bool) {
         if !isEditingAtCarets, !additionalCarets.isEmpty { additionalCarets = [] }
         super.setSelectedRanges(ranges, affinity: affinity, stillSelecting: stillSelecting)

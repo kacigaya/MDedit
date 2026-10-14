@@ -60,4 +60,25 @@ struct ImageCacheTests {
         let svg = Data(#"<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"/>"#.utf8)
         #expect(ImageCache.decoded(svg) == nil)
     }
+
+    /// `![](/dev/zero)` read forever, and a pipe waited forever for a writer.
+    @Test("Only a regular local file within the size limit is read as an image")
+    func localFilesOnly() throws {
+        #expect(ImageCache.localData(URL(fileURLWithPath: "/dev/zero")) == nil)
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("MdEditImages-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let pipe = directory.appendingPathComponent("pipe.png")
+        #expect(mkfifo(pipe.path, 0o600) == 0)
+        #expect(ImageCache.localData(pipe) == nil)
+        let small = directory.appendingPathComponent("small.png")
+        try Data([1, 2, 3]).write(to: small)
+        #expect(ImageCache.localData(small) == Data([1, 2, 3]))
+        let large = directory.appendingPathComponent("large.png")
+        #expect(FileManager.default.createFile(atPath: large.path, contents: nil))
+        let handle = try FileHandle(forWritingTo: large)
+        try handle.truncate(atOffset: UInt64(ImageCache.maxDownloadBytes + 1))
+        try handle.close()
+        #expect(ImageCache.localData(large) == nil)
+    }
 }

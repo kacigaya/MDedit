@@ -573,19 +573,22 @@ final class DocumentParser {
         guard !indented, container.isParagraph, contains(line, from: nextNonspace, character: UInt16(ascii: "|")),
               let alignments = tableDelimiter(line, from: nextNonspace)
         else { return .none }
-        var paragraphLines = container.content.components(separatedBy: "\n")
-        if paragraphLines.last == "" { paragraphLines.removeLast() }
-        guard let header = paragraphLines.last,
-              MarkdownTable.cells(of: header).count == alignments.count
-        else { return .none }
+        // Only the last line is looked at: a paragraph of delimiter rows that
+        // never match would otherwise be split whole once per line.
+        // In UTF-8, where stepping back is constant time, unlike Characters.
+        let content = container.content
+        let bytes = content.utf8
+        let end = bytes.last == UInt8(ascii: "\n") ? bytes.index(before: bytes.endIndex) : bytes.endIndex
+        let headerStart = bytes[..<end].lastIndex(of: UInt8(ascii: "\n")).map(bytes.index(after:)) ?? bytes.startIndex
+        let header = String(content[headerStart..<end])
+        guard MarkdownTable.cells(of: header).count == alignments.count else { return .none }
         closeUnmatchedBlocks()
         let table = Block(.table(alignments: alignments), line: lineNumber)
         table.rows = [header]
-        paragraphLines.removeLast()
-        if paragraphLines.isEmpty {
+        if headerStart == bytes.startIndex {
             container.replace(with: table)
         } else {
-            container.content = paragraphLines.joined(separator: "\n") + "\n"
+            container.content = String(content[..<headerStart])
             finalize(container)
             table.insertAfter(container)
         }

@@ -57,6 +57,18 @@ struct WindowFlowTests {
         #expect(try String(contentsOf: document.url!, encoding: .utf8) == "saved\n")
     }
 
+    /// Closing any tab used to show the one at its index afterwards, so
+    /// closing a tab in the background switched away from the one in front.
+    @Test("Closing a background tab leaves the front tab in front")
+    func closeBackgroundTab() {
+        let controller = makeWindow()
+        for _ in 0..<4 { controller.newDocument() }
+        let front = controller.documents[3]
+        controller.select(index: 3)
+        controller.closeDocument(at: 0)
+        #expect(controller.activeDocument === front)
+    }
+
     @Test("Save in the prompt writes the file before the tab goes")
     func saveOnClose() throws {
         let controller = makeWindow()
@@ -110,6 +122,36 @@ struct WindowFlowTests {
         let asked = script(first, [.cancel])
         #expect(first.windowShouldClose(first.window!) == false)
         #expect(asked() == ["kept.md"])
+    }
+
+    /// A crash, then a sync or a pull changes the file, then a relaunch: the
+    /// recovered edits were laid over the new text as if made to it, and
+    /// saving them undid the change unseen.
+    @Test("Recovered edits to a file changed since ask before standing in for it")
+    func recoveryOverChangedFile() throws {
+        let crashed = makeWindow()
+        let document = try openEdited("synced.md", in: crashed)
+        crashed.askAboutExternalChange = { _, answer in answer(false) }
+        crashed.writeRecoverySnapshots(rewriting: true)
+        let snapshots = crashed.recovery.snapshots().filter { $0.id == document.id }
+        #expect(snapshots.count == 1)
+
+        // Unchanged since: the edits come back, nothing to ask.
+        let quiet = makeWindow()
+        var asked = 0
+        quiet.askAboutExternalChange = { _, answer in asked += 1; answer(false) }
+        quiet.restore(snapshots: snapshots)
+        #expect(asked == 0)
+        #expect(quiet.documents.contains { $0.text == "edited saved\n" })
+
+        try "pulled\n".write(to: document.url!, atomically: true, encoding: .utf8)
+        let relaunched = makeWindow()
+        relaunched.askAboutExternalChange = { _, answer in asked += 1; answer(true) }
+        relaunched.restore(snapshots: snapshots)
+        #expect(asked == 1)
+        let restored = try #require(relaunched.documents.first { $0.url == document.url })
+        #expect(restored.text == "pulled\n")
+        #expect(!restored.isDirty)
     }
 
     /// The file's own encoding cannot hold an emoji; without a way out,

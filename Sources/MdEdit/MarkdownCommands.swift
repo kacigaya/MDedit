@@ -163,7 +163,7 @@ extension EditorViewController {
 
     private func lineRange(for range: NSRange) -> NSRange {
         let first = storage.line(at: range.location)
-        let last = storage.line(at: NSMaxRange(range))
+        let last = storage.lastLine(of: range)
         return storage.characterRange(forLines: first...last)
     }
 
@@ -171,7 +171,7 @@ extension EditorViewController {
     private func forEachSelectedLine(actionName: String, _ transform: ([UInt16], LineInfo) -> String) {
         let selection = textView.selectedRange()
         let first = storage.line(at: selection.location)
-        let last = storage.line(at: NSMaxRange(selection))
+        let last = storage.lastLine(of: selection)
         let text = storage.string as NSString
 
         var rewritten: [String] = []

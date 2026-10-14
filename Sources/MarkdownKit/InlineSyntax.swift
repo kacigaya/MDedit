@@ -478,11 +478,9 @@ func parseMath(_ characters: [UInt16], at index: Int, limit: Int, memo: inout Ma
     if let exhausted = display ? memo.display : memo.inline, start >= exhausted { return nil }
 
     var cursor = start
-    var sawEscape = false
     while cursor < limit {
         let character = characters[cursor]
         if character == UInt16(ascii: "\\") {
-            sawEscape = true
             cursor += 2
             continue
         }
@@ -498,11 +496,11 @@ func parseMath(_ characters: [UInt16], at index: Int, limit: Int, memo: inout Ma
         }
         cursor += 1
     }
-    // A later start sees a subset of the closers this one did, unless an
-    // escape shifted which characters the scan stepped over.
-    if !sawEscape {
-        if display { memo.display = start } else { memo.inline = start }
-    }
+    // A later start sees a subset of the closers this one did. Escapes do
+    // not change that: an opener is never the escaped half of a pair, so
+    // this scan stepped onto every later start and from there took the
+    // same steps a scan from it would.
+    if display { memo.display = start } else { memo.inline = start }
     return nil
 }
 

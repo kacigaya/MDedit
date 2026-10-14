@@ -11,6 +11,9 @@ struct RecoveryStore {
         /// The file the text belongs to, or nil for an untitled document.
         var url: URL?
         var text: String
+        /// A digest of the file's text the edits were made to, so recovery
+        /// can tell when the file changed since; nil in older snapshots.
+        var base: String?
     }
 
     let directory: URL

@@ -189,3 +189,57 @@ struct RevertTests {
         #expect(document.text == "Hi\n")
     }
 }
+
+@MainActor
+@Suite("Watching and writing files", .serialized)
+struct FileOnDiskTests {
+    private func folder() throws -> URL {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("MdEditFiles-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        return url
+    }
+
+    /// A save through a symlink renamed a new file over the link, so the
+    /// note it pointed to was never updated.
+    @Test("Saving a symlinked note writes the file it points to and keeps the link")
+    func saveThroughSymlink() throws {
+        let folder = try folder()
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let target = folder.appendingPathComponent("real.md")
+        let link = folder.appendingPathComponent("link.md")
+        try "old\n".write(to: target, atomically: true, encoding: .utf8)
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: target)
+
+        let document = try Document.open(contentsOf: link, theme: .light)
+        document.storage.replaceCharacters(in: NSRange(location: 0, length: 3), with: "new")
+        try document.save()
+        #expect(try FileManager.default.destinationOfSymbolicLink(atPath: link.path) == target.path)
+        #expect(try String(contentsOf: target, encoding: .utf8) == "new\n")
+    }
+
+    /// The watch looked for a replaced file once, a tenth of a second on;
+    /// a file back any later went unwatched, and saving overwrote whatever
+    /// was written to it after.
+    @Test("A file deleted and recreated a moment later is still watched")
+    func watchSurvivesSlowReplace() async throws {
+        let folder = try folder()
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let url = folder.appendingPathComponent("watched.md")
+        try "one\n".write(to: url, atomically: false, encoding: .utf8)
+        final class Box { var changes = 0 }
+        let box = Box()
+        let watcher = try #require(FileWatcher(url: url) { box.changes += 1 })
+
+        try FileManager.default.removeItem(at: url)
+        try await Task.sleep(for: .milliseconds(500))
+        try "two\n".write(to: url, atomically: false, encoding: .utf8)
+        try await Task.sleep(for: .milliseconds(400))
+        let before = box.changes
+        try "three\n".write(to: url, atomically: false, encoding: .utf8)
+        for _ in 0..<30 where box.changes == before {
+            try await Task.sleep(for: .milliseconds(100))
+        }
+        #expect(box.changes > before)
+        withExtendedLifetime(watcher) {}
+    }
+}

@@ -1,4 +1,5 @@
 import AppKit
+import CryptoKit
 import MarkdownKit
 
 /// How a file's text was stored on disk, so saving writes it back the same way.
@@ -136,6 +137,14 @@ final class Document {
         isMissingOnDisk = false
     }
 
+    /// Identifies the text last read from or written to disk, for telling
+    /// whether a recovery snapshot was made against what the file holds now.
+    var savedDigest: String { Self.digest(savedText) }
+
+    static func digest(_ text: String) -> String {
+        SHA256.hash(data: Data(text.utf8)).map { String(format: "%02x", $0) }.joined()
+    }
+
     /// Replaces the editor contents without touching what counts as saved,
     /// so recovered text shows as unsaved changes.
     func restoreUnsavedText(_ text: String) {
@@ -191,7 +200,10 @@ final class Document {
                 self?.isSavingSelf = false
             }
         }
-        try data.write(to: destination, options: .atomic)
+        // Through a symlink to the file it names: an atomic write renames a
+        // new file into place, which would replace the link itself and leave
+        // the real file as it was.
+        try data.write(to: destination.resolvingSymlinksInPath(), options: .atomic)
         let needsWatcher = url != destination || isMissingOnDisk
         if url != destination { FileAccess.remember(destination) }
         url = destination

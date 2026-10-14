@@ -53,13 +53,23 @@ final class FileWatcher: @unchecked Sendable {
     }
 
     @MainActor
-    private func restart() {
+    private func restart(attempt: Int = 0) {
         source?.cancel()
         source = nil
         descriptor = -1
-        // Give the replacing writer a moment to finish.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
-            MainActor.assumeIsolated { _ = self?.start() }
+        // Give the replacing writer a moment to finish, and keep looking for
+        // a while: a checkout or a sync can leave the path empty for longer,
+        // and a watch given up on misses every later change unnoticed.
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.retryDelay) { [weak self] in
+            MainActor.assumeIsolated {
+                guard let self, self.source == nil else { return }
+                if !self.start(), attempt + 1 < Self.retries { self.restart(attempt: attempt + 1) }
+            }
         }
     }
+
+    private static let retryDelay = 0.1
+    /// Two seconds of looking, after which the document is marked missing
+    /// on disk and saving it watches again.
+    private static let retries = 20
 }

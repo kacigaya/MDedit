@@ -479,6 +479,13 @@ final class MarkdownTextStorage: MDBackedTextStorage {
         structure.index.line(at: min(max(0, location), backing.length))
     }
 
+    /// The last line a selection touches. One ending at the start of a line,
+    /// as a triple-click's does, ends on the line before: the next is not
+    /// part of it.
+    func lastLine(of range: NSRange) -> Int {
+        line(at: range.length > 0 ? NSMaxRange(range) - 1 : range.location)
+    }
+
     func characterRange(forLines lines: ClosedRange<Int>) -> NSRange {
         let lower = min(lines.lowerBound, structure.lineCount - 1)
         let upper = min(lines.upperBound, structure.lineCount - 1)

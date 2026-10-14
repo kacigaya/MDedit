@@ -292,8 +292,10 @@ extension EditorViewController: NSTextViewDelegate {
         shouldChangeTextIn affectedCharRange: NSRange,
         replacementString: String?
     ) -> Bool {
+        // Composed text, and the character that ends a composition, replace
+        // the marked text: pairing or wrapping it would double it.
         guard let replacementString, !self.textView.isEditingAtCarets, !self.textView.isReplacingAsCommand,
-              !self.textView.hasMultipleTargets
+              !self.textView.hasMultipleTargets, !self.textView.isSettingMarkedText, !self.textView.hasMarkedText()
         else { return true }
         return !input.handleInsertion(of: replacementString, in: textView, range: affectedCharRange)
     }

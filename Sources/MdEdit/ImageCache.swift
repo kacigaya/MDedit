@@ -73,7 +73,7 @@ final class ImageCache {
     private nonisolated static func load(_ url: URL) async -> NSImage? {
         let data: Data?
         if url.isFileURL {
-            data = try? Data(contentsOf: url)
+            data = localData(url)
         } else {
             data = await download(url)
         }
@@ -84,6 +84,18 @@ final class ImageCache {
     /// The most a web image may weigh: a document must not be able to make
     /// the app read an endless response into memory.
     nonisolated static let maxDownloadBytes = 50 * 1024 * 1024
+
+    /// A local image's bytes, held to the same limit as a web image's. Only
+    /// a regular file is read: `/dev/zero` or a named pipe would be read
+    /// forever, or wait forever for a writer.
+    nonisolated static func localData(_ url: URL) -> Data? {
+        let path = url.resolvingSymlinksInPath().path
+        guard let attributes = try? FileManager.default.attributesOfItem(atPath: path),
+              attributes[.type] as? FileAttributeType == .typeRegular,
+              let size = attributes[.size] as? Int, size <= maxDownloadBytes
+        else { return nil }
+        return try? Data(contentsOf: URL(fileURLWithPath: path))
+    }
 
     /// A web image's bytes, by way of a file so an oversized one never
     /// reaches memory. Nil when it fails or is too large.

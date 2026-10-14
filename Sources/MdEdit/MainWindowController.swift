@@ -68,6 +68,11 @@ final class MainWindowController: NSWindowController {
     lazy var askAboutUnsaved: (Document, @escaping (UnsavedAnswer) -> Void) -> Void = { [weak self] document, answer in
         self?.presentUnsavedAlert(for: document, answer: answer)
     }
+    /// Asks whether to drop unsaved edits for the file's changed contents;
+    /// a sheet unless a test answers instead.
+    lazy var askAboutExternalChange: (Document, @escaping (Bool) -> Void) -> Void = { [weak self] document, answer in
+        self?.presentExternalChangeAlert(for: document, answer: answer)
+    }
     /// Asks whether to save a document as UTF-8 when its text no longer fits
     /// the encoding it was read in; a sheet unless a test answers instead.
     lazy var askToConvertToUTF8: (Document, @escaping (Bool) -> Void) -> Void = { [weak self] document, answer in
@@ -311,7 +316,7 @@ final class MainWindowController: NSWindowController {
     /// Takes a document out of this window without asking about changes;
     /// the window closes once it has nothing left. Keeping the selection
     /// leaves the tab shown alone when another goes.
-    private func remove(_ document: Document, keepingSelection: Bool = false) {
+    private func remove(_ document: Document) {
         // Looked up afresh: tabs may have moved while a sheet was up.
         guard let index = documents.firstIndex(where: { $0 === document }) else { return }
         if let editor = editors.removeValue(forKey: ObjectIdentifier(document)) {
@@ -327,7 +332,8 @@ final class MainWindowController: NSWindowController {
         documents.remove(at: index)
         if documents.isEmpty {
             window?.close()
-        } else if keepingSelection, let shown, shown !== document, let kept = documents.firstIndex(where: { $0 === shown }) {
+        } else if let shown, shown !== document, let kept = documents.firstIndex(where: { $0 === shown }) {
+            // A tab closed in the background leaves the one in front there.
             selection = kept
             refreshTabs()
         } else {
@@ -621,7 +627,7 @@ final class MainWindowController: NSWindowController {
     /// A file changed on disk: reload quietly when there is nothing to lose,
     /// ask when there is.
     private func handleExternalChange(of document: Document) {
-        guard let window, documents.contains(where: { $0 === document }) else { return }
+        guard window != nil, documents.contains(where: { $0 === document }) else { return }
         if let url = document.url, !FileManager.default.fileExists(atPath: url.path) {
             // A save-by-replace can leave the path empty for a moment; look again.
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self, weak document] in
@@ -645,17 +651,22 @@ final class MainWindowController: NSWindowController {
             return
         }
 
+        askAboutExternalChange(document) { [weak self] reload in
+            guard reload else { return }
+            try? document.revert()
+            self?.refreshTabs()
+            self?.refreshStatus()
+        }
+    }
+
+    private func presentExternalChangeAlert(for document: Document, answer: @escaping (Bool) -> Void) {
+        guard let window else { return answer(false) }
         let alert = NSAlert()
         alert.messageText = String(localized: "“\(document.displayName)” changed on disk.")
         alert.informativeText = String(localized: "You have unsaved changes here. Reloading discards them.")
         alert.addButton(withTitle: String(localized: "Keep My Changes"))
         alert.addButton(withTitle: String(localized: "Reload"))
-        alert.beginSheetModal(for: window) { [weak self] response in
-            guard response == .alertSecondButtonReturn else { return }
-            try? document.revert()
-            self?.refreshTabs()
-            self?.refreshStatus()
-        }
+        alert.beginSheetModal(for: window) { answer($0 == .alertSecondButtonReturn) }
     }
 
     // MARK: - Links
@@ -943,7 +954,10 @@ final class MainWindowController: NSWindowController {
             let state = Document.SnapshotState(generation: document.storage.editGeneration, url: document.url)
             if document.isDirty {
                 guard rewriting || document.snapshotState != state else { continue }
-                recovery.writeLater(.init(id: document.id, url: document.url, text: document.text))
+                recovery.writeLater(.init(
+                    id: document.id, url: document.url, text: document.text,
+                    base: document.url == nil ? nil : document.savedDigest
+                ))
                 document.snapshotState = state
             } else if rewriting || document.snapshotState != nil {
                 recovery.remove(id: document.id)
@@ -1027,7 +1041,7 @@ final class MainWindowController: NSWindowController {
             select(index: index)
         }
         if let placeholder, restoredLast != nil, documents.contains(where: { $0 === placeholder }), !placeholder.isDirty {
-            remove(placeholder, keepingSelection: true)
+            remove(placeholder)
             recovery.remove(id: placeholder.id)
         }
         refreshTabs()
@@ -1038,11 +1052,16 @@ final class MainWindowController: NSWindowController {
     func restore(snapshots: [RecoveryStore.Snapshot]) {
         for snapshot in snapshots {
             if let url = snapshot.url {
-                if let open = documents.first(where: { $0.url == url }) {
+                let path = url.standardizedFileURL.path
+                if let open = documents.first(where: { $0.url?.standardizedFileURL.path == path }) {
+                    let changed = snapshot.base.map { $0 != open.savedDigest } ?? false
                     open.restoreUnsavedText(snapshot.text)
+                    if changed { recoveredOverChangedFile(open) }
                 } else if let opened = try? Document.open(contentsOf: url, theme: theme) {
+                    let changed = snapshot.base.map { $0 != opened.savedDigest } ?? false
                     opened.restoreUnsavedText(snapshot.text)
                     addReplacingPlaceholder(opened)
+                    if changed { recoveredOverChangedFile(opened) }
                 } else {
                     let missing = Document(url: url, theme: theme)
                     missing.restoreUnsavedText(snapshot.text)
@@ -1057,6 +1076,19 @@ final class MainWindowController: NSWindowController {
         }
 
         refreshTabs()
+    }
+
+    /// The file changed after the recovered edits were made (a sync, a
+    /// pull): saving them as they are would undo that change unseen, so
+    /// the choice is put as for any change on disk under unsaved edits.
+    private func recoveredOverChangedFile(_ document: Document) {
+        if let index = documents.firstIndex(where: { $0 === document }) { select(index: index) }
+        askAboutExternalChange(document) { [weak self] reload in
+            guard reload else { return }
+            try? document.revert()
+            self?.refreshTabs()
+            self?.refreshStatus()
+        }
     }
 
     private func restore(_ tab: Session.Tab, in editor: EditorViewController, of document: Document) {
