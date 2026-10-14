@@ -122,12 +122,12 @@ struct SessionTests {
 @Suite("Document")
 struct DocumentTests {
     @Test("Recovered text counts as unsaved; saving clears it")
-    func restoredTextIsDirty() throws {
+    func restoredTextIsDirty() async throws {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("MdEditDocTest-\(UUID().uuidString).md")
         defer { try? FileManager.default.removeItem(at: url) }
         try Data("saved\r\n".utf8).write(to: url)
 
-        let document = try Document.open(contentsOf: url, theme: .light)
+        let document = try await Document.open(contentsOf: url, theme: .light)
         #expect(!document.isDirty)
         document.restoreUnsavedText("recovered\n")
         #expect(document.isDirty)
@@ -135,6 +135,28 @@ struct DocumentTests {
         try document.save()
         #expect(!document.isDirty)
         #expect(try Data(contentsOf: url) == Data("recovered\r\n".utf8))
+    }
+
+    /// Files were read on the main thread, so one still downloading from
+    /// iCloud, or on a slow volume, froze the app until it arrived.
+    @Test("A file is read off the main thread, which stays free meanwhile")
+    func readOffMainThread() async throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("MdEditDocTest-\(UUID().uuidString).md")
+        defer { try? FileManager.default.removeItem(at: url) }
+        try "# Slow\n".write(to: url, atomically: true, encoding: .utf8)
+        let gate = SlowGate()
+        let reading = Task {
+            try await FileFormat.read(url) { url in
+                gate.pass()
+                return try Data(contentsOf: url)
+            }
+        }
+        try await gate.waitForReads()
+        gate.open()
+        #expect(try await reading.value.text == "# Slow\n")
+        #expect(gate.calls == 1)
+        #expect(!gate.ranOnMainThread)
+        #expect(!gate.gaveUp)
     }
 
     @Test("A document whose file vanished stays dirty until saved")
@@ -157,32 +179,58 @@ struct RevertTests {
     /// A sync or a checkout rewrites files as they were; reloading those
     /// would restyle the whole document for nothing.
     @Test("A file rewritten unchanged is not reloaded; a changed one is")
-    func unchangedRewrite() throws {
+    func unchangedRewrite() async throws {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("MdEditRevert-\(UUID().uuidString).md")
         try "# Notes\n".write(to: url, atomically: true, encoding: .utf8)
         defer { try? FileManager.default.removeItem(at: url) }
-        let document = try Document.open(contentsOf: url, theme: .light)
+        let document = try await Document.open(contentsOf: url, theme: .light)
         let generation = document.storage.editGeneration
 
         try "# Notes\n".write(to: url, atomically: true, encoding: .utf8)
-        try document.revert()
+        try await document.revert()
         #expect(document.storage.editGeneration == generation)
 
         try "# Changed\n".write(to: url, atomically: true, encoding: .utf8)
-        try document.revert()
+        try await document.revert()
         #expect(document.text == "# Changed\n")
         #expect(!document.isDirty)
     }
 
 
+    /// Reading now happens while the editor stays usable: what is typed
+    /// meanwhile must not be replaced by the file's text once it arrives.
+    @Test("Edits typed while the file is read again are kept")
+    func revertKeepsEditsTypedMeanwhile() async throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("MdEditRevert-\(UUID().uuidString).md")
+        try "# Notes\n".write(to: url, atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(at: url) }
+        let document = try await Document.open(contentsOf: url, theme: .light)
+        try "# Changed\n".write(to: url, atomically: true, encoding: .utf8)
+
+        let gate = SlowGate()
+        let reverting = Task {
+            try await document.revert { url in
+                gate.pass()
+                return try Data(contentsOf: url)
+            }
+        }
+        try await gate.waitForReads()
+        document.storage.replaceCharacters(in: NSRange(location: 0, length: 0), with: "typed ")
+        gate.open()
+        #expect(try await reverting.value == false)
+        #expect(document.text == "typed # Notes\n")
+        #expect(!gate.ranOnMainThread)
+        #expect(!gate.gaveUp)
+    }
+
     /// The history was of the text before the reload; undoing it afterwards
     /// replayed its ranges onto the new text, past its end.
     @Test("Reloading from disk clears the undo history, so Undo cannot crash")
-    func revertClearsUndo() throws {
+    func revertClearsUndo() async throws {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("MdEditRevert-\(UUID().uuidString).md")
         try "A line of text long enough to type after.\n".write(to: url, atomically: true, encoding: .utf8)
         defer { try? FileManager.default.removeItem(at: url) }
-        let document = try Document.open(contentsOf: url, theme: .light)
+        let document = try await Document.open(contentsOf: url, theme: .light)
         let editor = EditorViewController(textStorage: document.storage, undoManager: document.undoManager)
         _ = editor.view
         document.undoManager.groupsByEvent = false
@@ -193,7 +241,7 @@ struct RevertTests {
         try document.save()
 
         try "Hi\n".write(to: url, atomically: true, encoding: .utf8)
-        try document.revert()
+        try await document.revert()
         #expect(!document.undoManager.canUndo)
         document.undoManager.undo()
         #expect(document.text == "Hi\n")
@@ -212,7 +260,7 @@ struct FileOnDiskTests {
     /// A save through a symlink renamed a new file over the link, so the
     /// note it pointed to was never updated.
     @Test("Saving a symlinked note writes the file it points to and keeps the link")
-    func saveThroughSymlink() throws {
+    func saveThroughSymlink() async throws {
         let folder = try folder()
         defer { try? FileManager.default.removeItem(at: folder) }
         let target = folder.appendingPathComponent("real.md")
@@ -220,7 +268,7 @@ struct FileOnDiskTests {
         try "old\n".write(to: target, atomically: true, encoding: .utf8)
         try FileManager.default.createSymbolicLink(at: link, withDestinationURL: target)
 
-        let document = try Document.open(contentsOf: link, theme: .light)
+        let document = try await Document.open(contentsOf: link, theme: .light)
         document.storage.replaceCharacters(in: NSRange(location: 0, length: 3), with: "new")
         try document.save()
         #expect(try FileManager.default.destinationOfSymbolicLink(atPath: link.path) == target.path)

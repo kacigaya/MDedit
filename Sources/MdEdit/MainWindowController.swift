@@ -539,13 +539,61 @@ final class MainWindowController: NSWindowController {
         addReplacingPlaceholder(document)
     }
 
-    func open(url: URL) {
-        if focusDocument(at: url) { return }
-        if focusElsewhere?(url) == true { return }
-        do {
-            addReplacingPlaceholder(try Document.open(contentsOf: url, theme: theme))
-        } catch {
-            show(error: error)
+    /// Opens a file in a tab of its own, read off the main thread. The task
+    /// ends once the tab is there or the error shown; there is none when
+    /// the file was already open and has been brought forward instead.
+    @discardableResult
+    func open(url: URL) -> Task<Void, Never>? {
+        if focusDocument(at: url) { return nil }
+        if focusElsewhere?(url) == true { return nil }
+        let path = url.standardizedFileURL.path
+        // Asked again while it is still being read: one tab, not two.
+        if let opening = openings[path] { return opening }
+        let readFile = readFile
+        let opening = Task { [weak self] in
+            do {
+                let read = try await FileFormat.read(url, using: readFile)
+                guard let self else { return }
+                openings[path] = nil
+                // Opened some other way while it was being read.
+                if focusDocument(at: url) || focusElsewhere?(url) == true { return }
+                addReplacingPlaceholder(Document.open(url, read: read, theme: theme))
+            } catch {
+                self?.openings[path] = nil
+                self?.show(error: error)
+            }
+        }
+        openings[path] = opening
+        return opening
+    }
+
+    /// Files being read for tabs, by path.
+    private var openings: [String: Task<Void, Never>] = [:]
+    /// Reads a file's bytes; called off the main thread. A test stands in
+    /// a file that is slow to arrive.
+    var readFile: @Sendable (URL) throws -> Data = { try Data(contentsOf: $0) }
+
+    /// Files being read again for their tabs, by when they started.
+    private var reloads: [Int: Task<Void, Never>] = [:]
+    private var nextReload = 0
+
+    /// Waits until every file being opened has its tab, or its error shown,
+    /// and every file being read again has been taken in.
+    func finishReading() async {
+        while let reading = openings.values.first ?? reloads.values.first { await reading.value }
+    }
+
+    /// Reads several files side by side, off the main thread; nil for any
+    /// that could not be read.
+    private func read(_ urls: [URL]) async -> [(text: String, format: FileFormat)?] {
+        let readFile = readFile
+        return await withTaskGroup(of: (Int, (text: String, format: FileFormat)?).self) { group in
+            for (index, url) in urls.enumerated() {
+                group.addTask { (index, try? await FileFormat.read(url, using: readFile)) }
+            }
+            var found = [(text: String, format: FileFormat)?](repeating: nil, count: urls.count)
+            for await (index, read) in group { found[index] = read }
+            return found
         }
     }
 
@@ -644,16 +692,27 @@ final class MainWindowController: NSWindowController {
             }
             return
         }
-        guard document.isDirty else {
-            try? document.revert()
-            refreshTabs()
-            refreshStatus()
-            return
-        }
+        guard document.isDirty else { return reloadFromDisk(document) }
 
         askAboutExternalChange(document) { [weak self] reload in
             guard reload else { return }
-            try? document.revert()
+            self?.reloadFromDisk(document)
+        }
+    }
+
+    /// Reads a document's file again, off the main thread. Edits typed while
+    /// it was read are not thrown away: they are asked about like any others.
+    private func reloadFromDisk(_ document: Document) {
+        let readFile = readFile
+        let id = nextReload
+        nextReload += 1
+        reloads[id] = Task { [weak self, weak document] in
+            defer { self?.reloads[id] = nil }
+            guard let document else { return }
+            if (try? await document.revert(using: readFile)) == false {
+                self?.handleExternalChange(of: document)
+                return
+            }
             self?.refreshTabs()
             self?.refreshStatus()
         }
@@ -877,7 +936,14 @@ final class MainWindowController: NSWindowController {
 
     /// Opens a search result's file and selects the match.
     private func openMatch(_ url: URL, _ match: WorkspaceSearch.Match) {
-        open(url: url)
+        guard let opening = open(url: url) else { return select(match, in: url) }
+        Task { [weak self] in
+            await opening.value
+            self?.select(match, in: url)
+        }
+    }
+
+    private func select(_ match: WorkspaceSearch.Match, in url: URL) {
         guard let document = activeDocument, document.url?.standardizedFileURL == url.standardizedFileURL,
               let editor = currentEditor, match.line < document.storage.structure.lineCount
         else { return }
@@ -975,7 +1041,13 @@ final class MainWindowController: NSWindowController {
 
     /// Whether this window has a file or unsaved snapshot for a URL.
     func contains(_ url: URL) -> Bool {
-        documents.contains { $0.url?.standardizedFileURL.path == url.standardizedFileURL.path }
+        document(at: url) != nil
+    }
+
+    /// The tab holding a file, if this window has one.
+    private func document(at url: URL) -> Document? {
+        let path = url.standardizedFileURL.path
+        return documents.first { $0.url?.standardizedFileURL.path == path }
     }
 
     /// This window's tabs, folder and position, for the session.
@@ -1009,8 +1081,9 @@ final class MainWindowController: NSWindowController {
     }
 
     /// Reopens a window's files from the previous session, skipping any
-    /// that have gone, and its folder and position.
-    func restore(_ saved: Session.Window) {
+    /// that have gone, and its folder and position. The files are read side
+    /// by side, off the main thread, and come back in their saved order.
+    func restore(_ saved: Session.Window) async {
         if let frame = saved.frame { window?.setFrame(from: frame) }
         if let root = saved.workspace, FileManager.default.fileExists(atPath: root.path) {
             setWorkspace(Workspace(root: root))
@@ -1018,11 +1091,17 @@ final class MainWindowController: NSWindowController {
         // An untouched empty tab gives way, once another is showing: closed
         // first, it would show the next tab, and make its editor, on the way.
         let placeholder = documents.first { $0.url == nil && !$0.isDirty && $0.storage.length == 0 }
+        let unopened = saved.tabs.indices.filter { !contains(saved.tabs[$0].url) }
+        let reads = await read(unopened.map { saved.tabs[$0].url })
+        var found: [Int: (text: String, format: FileFormat)] = [:]
+        for (index, read) in zip(unopened, reads) { found[index] = read }
         var selected: Document?
         var restoredLast: Document?
         for (index, tab) in saved.tabs.enumerated() {
-            let document = documents.first(where: { $0.url == tab.url })
-                ?? (try? Document.open(contentsOf: tab.url, theme: theme)).map { opened in
+            // Looked up after the reads: a file opened meanwhile has its tab.
+            let document = document(at: tab.url)
+                ?? found[index].map { read in
+                    let opened = Document.open(tab.url, read: read, theme: theme)
                     addDocument(opened, selecting: false)
                     return opened
                 }
@@ -1048,16 +1127,22 @@ final class MainWindowController: NSWindowController {
     }
 
     /// Lays recovered unsaved text over the files it belongs to, or into new
-    /// tabs for untitled documents and files that have gone.
-    func restore(snapshots: [RecoveryStore.Snapshot]) {
-        for snapshot in snapshots {
+    /// tabs for untitled documents and files that have gone. The files are
+    /// read side by side, off the main thread.
+    func restore(snapshots: [RecoveryStore.Snapshot]) async {
+        let unopened = snapshots.indices.filter { snapshots[$0].url.map { !contains($0) } ?? false }
+        let reads = await read(unopened.compactMap { snapshots[$0].url })
+        var found: [Int: (text: String, format: FileFormat)] = [:]
+        for (index, read) in zip(unopened, reads) { found[index] = read }
+
+        for (index, snapshot) in snapshots.enumerated() {
             if let url = snapshot.url {
-                let path = url.standardizedFileURL.path
-                if let open = documents.first(where: { $0.url?.standardizedFileURL.path == path }) {
+                if let open = document(at: url) {
                     let changed = snapshot.base.map { $0 != open.savedDigest } ?? false
                     open.restoreUnsavedText(snapshot.text)
                     if changed { recoveredOverChangedFile(open) }
-                } else if let opened = try? Document.open(contentsOf: url, theme: theme) {
+                } else if let read = found[index] {
+                    let opened = Document.open(url, read: read, theme: theme)
                     let changed = snapshot.base.map { $0 != opened.savedDigest } ?? false
                     opened.restoreUnsavedText(snapshot.text)
                     addReplacingPlaceholder(opened)
@@ -1085,9 +1170,7 @@ final class MainWindowController: NSWindowController {
         if let index = documents.firstIndex(where: { $0 === document }) { select(index: index) }
         askAboutExternalChange(document) { [weak self] reload in
             guard reload else { return }
-            try? document.revert()
-            self?.refreshTabs()
-            self?.refreshStatus()
+            self?.reloadFromDisk(document)
         }
     }
 

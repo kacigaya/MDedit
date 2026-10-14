@@ -55,7 +55,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationWillTerminate(_ notification: Notification) {
         controllers.forEach { $0.cancelPendingWork() }
         saveSession()
-        RecoveryStore.standard.removeAll()
+        // Quit before restoring finished, the snapshots not yet laid over
+        // their files are still the only copy of that text.
+        if hasRestored { RecoveryStore.standard.removeAll() }
     }
 
     func application(_ application: NSApplication, open urls: [URL]) {
@@ -146,27 +148,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // Before sessions remembered folders, the last folder was kept here.
             if let workspace = Workspace.load() { controller.setWorkspace(Workspace(root: FileAccess.resolve(workspace.root))) }
         }
-        for (index, window) in saved.enumerated() {
+        // The windows come up now and fill in as their files are read, off
+        // the main thread: a file still in iCloud or on a slow volume holds
+        // up only its own window, not the app.
+        let windows = saved.enumerated().map { index, window in
             // A window may already exist for files opened at launch; reuse it first.
-            let controller = index < controllers.count ? controllers[index] : makeWindow(restoringFrame: true)
-            controller.restore(window)
+            (index < controllers.count ? controllers[index] : makeWindow(restoringFrame: true), window)
         }
-
-        var leftovers: [RecoveryStore.Snapshot] = []
-        for snapshot in snapshots {
-            if let url = snapshot.url, let owner = controllers.first(where: { $0.contains(url) }) {
-                owner.restore(snapshots: [snapshot])
-            } else {
-                leftovers.append(snapshot)
+        Task {
+            await withTaskGroup { group in
+                for (controller, window) in windows {
+                    group.addTask { await controller.restore(window) }
+                }
             }
-        }
-        if !leftovers.isEmpty { (controllers.first ?? makeWindow()).restore(snapshots: leftovers) }
 
-        hasRestored = true
-        // Snapshots were keyed by the old documents' ids; rewrite them under the new ones.
-        RecoveryStore.standard.removeAll()
-        controllers.forEach { $0.writeRecoverySnapshots(rewriting: true) }
-        saveSession()
+            var leftovers: [RecoveryStore.Snapshot] = []
+            for snapshot in snapshots {
+                if let url = snapshot.url, let owner = controllers.first(where: { $0.contains(url) }) {
+                    await owner.restore(snapshots: [snapshot])
+                } else {
+                    leftovers.append(snapshot)
+                }
+            }
+            if !leftovers.isEmpty { await (controllers.first ?? makeWindow()).restore(snapshots: leftovers) }
+
+            hasRestored = true
+            // Snapshots were keyed by the old documents' ids; rewrite them under the new ones.
+            RecoveryStore.standard.removeAll()
+            controllers.forEach { $0.writeRecoverySnapshots(rewriting: true) }
+            saveSession()
+        }
     }
 
     private func saveSession() {

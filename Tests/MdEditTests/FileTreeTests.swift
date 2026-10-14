@@ -14,12 +14,14 @@ struct FileTreeTests {
         return root
     }
 
-    /// The tree in a window, as the sidebar shows it.
-    private func makeTree(_ root: URL) -> (FileTreeView, NSWindow) {
+    /// The tree in a window, as the sidebar shows it, with its folder listed.
+    private func makeTree(_ root: URL, listing: (@Sendable (URL) -> [FileNode.Entry])? = nil) async -> (FileTreeView, NSWindow) {
         let tree = FileTreeView()
+        if let listing { tree.listFolder = listing }
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 240, height: 400), styleMask: [.titled], backing: .buffered, defer: true)
         window.contentView = tree
         tree.setRoot(root)
+        if listing == nil { await tree.finishListing() }
         return (tree, window)
     }
 
@@ -34,18 +36,20 @@ struct FileTreeTests {
     }
 
     @Test("A change re-lists only that folder, keeping what is open and selected")
-    func refreshKeepsState() throws {
+    func refreshKeepsState() async throws {
         let root = try makeFolder()
         defer { try? FileManager.default.removeItem(at: root) }
-        let (tree, window) = makeTree(root)
+        let (tree, window) = await makeTree(root)
         _ = window
         let notes = try #require(tree.outline.item(atRow: 0) as? FileNode)
         tree.outline.expandItem(notes)
+        await tree.finishListing()
         tree.reveal(root.appendingPathComponent("notes/first.md"))
         #expect(rows(tree) == ["notes", "first.md", "top.md"])
 
         try Data().write(to: root.appendingPathComponent("notes/second.md"))
         tree.folderContentsChanged(.folders([reported(root.appendingPathComponent("notes"))]))
+        await tree.finishListing()
         #expect(rows(tree) == ["notes", "first.md", "second.md", "top.md"])
         #expect(tree.outline.item(atRow: 0) as? FileNode === notes)
         #expect(tree.outline.isItemExpanded(notes))
@@ -54,15 +58,16 @@ struct FileTreeTests {
         // The root itself, with a folder that is open below it.
         try Data().write(to: root.appendingPathComponent("another.md"))
         tree.folderContentsChanged(.folders([reported(root)]))
+        await tree.finishListing()
         #expect(rows(tree) == ["notes", "first.md", "second.md", "another.md", "top.md"])
         #expect(tree.outline.isItemExpanded(notes))
     }
 
     @Test("Changes in hidden and dependency folders, or folders never listed, read nothing")
-    func ignoredFolders() throws {
+    func ignoredFolders() async throws {
         let root = try makeFolder()
         defer { try? FileManager.default.removeItem(at: root) }
-        let (tree, window) = makeTree(root)
+        let (tree, window) = await makeTree(root)
         _ = window
         #expect(rows(tree) == ["notes", "top.md"])
         let notes = try #require(tree.outline.item(atRow: 0) as? FileNode)
@@ -71,24 +76,89 @@ struct FileTreeTests {
         for folder in [".git", ".git/objects", "node_modules/pkg", "notes"] {
             tree.folderContentsChanged(.folders([reported(root) + folder]))
         }
+        await tree.finishListing()
         // The root was not read again, and `notes`, never opened, was not listed.
         #expect(rows(tree) == ["notes", "top.md"])
         #expect(notes.listedChildren == nil)
     }
 
     @Test("Out of sight, the tree waits until it is shown")
-    func hiddenTreeDefers() throws {
+    func hiddenTreeDefers() async throws {
         let root = try makeFolder()
         defer { try? FileManager.default.removeItem(at: root) }
-        let (tree, window) = makeTree(root)
+        let (tree, window) = await makeTree(root)
         _ = window
         tree.isHidden = true
         try Data().write(to: root.appendingPathComponent("later.md"))
         tree.folderContentsChanged(.folders([reported(root)]))
+        await tree.finishListing()
         #expect(rows(tree) == ["notes", "top.md"])
 
         tree.isHidden = false
+        await tree.finishListing()
         #expect(rows(tree) == ["notes", "later.md", "top.md"])
+    }
+
+    @Test("Reloading re-reads every listed folder and keeps open folders open")
+    func reloadKeepsExpansion() async throws {
+        let root = try makeFolder()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let (tree, window) = await makeTree(root)
+        _ = window
+        let notes = try #require(tree.outline.item(atRow: 0) as? FileNode)
+        tree.outline.expandItem(notes)
+        await tree.finishListing()
+        #expect(rows(tree) == ["notes", "first.md", "top.md"])
+
+        try Data().write(to: root.appendingPathComponent("notes/second.md"))
+        try Data().write(to: root.appendingPathComponent("another.md"))
+        tree.reload()
+        await tree.finishListing()
+        #expect(rows(tree) == ["notes", "first.md", "second.md", "another.md", "top.md"])
+        #expect(tree.outline.isItemExpanded(notes))
+    }
+
+    @Test("Revealing a file lists the folders on the way to it first")
+    func revealListsFolders() async throws {
+        let root = try makeFolder()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root.appendingPathComponent("notes/deep"), withIntermediateDirectories: true)
+        try Data().write(to: root.appendingPathComponent("notes/deep/buried.md"))
+        let (tree, window) = await makeTree(root)
+        _ = window
+        tree.reveal(root.appendingPathComponent("notes/deep/buried.md"))
+        await tree.finishListing()
+        #expect(rows(tree) == ["notes", "deep", "buried.md", "first.md", "top.md"])
+        #expect((tree.outline.item(atRow: tree.outline.selectedRow) as? FileNode)?.url.lastPathComponent == "buried.md")
+    }
+
+    /// Folders were listed on the main thread as the tree asked for them, so
+    /// a folder on a slow or remote volume froze the app until it answered.
+    @Test("Folders are listed off the main thread, which stays free meanwhile")
+    func listingOffMainThread() async throws {
+        let root = try makeFolder()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let gate = SlowGate()
+        let (tree, window) = await makeTree(root) { url in
+            gate.pass()
+            return FileNode.list(url)
+        }
+        _ = window
+        // Still waiting on the listing, and the main thread was handed back.
+        #expect(rows(tree).isEmpty)
+        try await gate.waitForReads()
+
+        gate.open()
+        await tree.finishListing()
+        #expect(rows(tree) == ["notes", "top.md"])
+        let notes = try #require(tree.outline.item(atRow: 0) as? FileNode)
+        tree.outline.expandItem(notes)
+        await tree.finishListing()
+        #expect(rows(tree) == ["notes", "first.md", "top.md"])
+        #expect(tree.outline.isItemExpanded(notes))
+        #expect(gate.calls == 2)
+        #expect(!gate.ranOnMainThread)
+        #expect(!gate.gaveUp)
     }
 
     @Test("The watcher reports the folder a file changed in")

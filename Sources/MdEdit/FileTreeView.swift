@@ -14,6 +14,14 @@ final class FileTreeView: NSView {
     private var theme: Theme = .light
     /// Set when the folders changed while the tree was out of sight.
     private var needsReload = false
+    /// Lists a folder's markdown files and subfolders. Called off the main
+    /// thread, as a folder on a slow or remote volume can take a while.
+    var listFolder: @Sendable (URL) -> [FileNode.Entry] = FileNode.list
+    /// Listings under way, by when they started.
+    private var listings: [Int: Task<Void, Never>] = [:]
+    private var nextListing = 0
+    /// The file a reveal is waiting to show, once its folders are listed.
+    private var pendingReveal: URL?
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -75,14 +83,61 @@ final class FileTreeView: NSView {
         outline.reloadData()
     }
 
-    /// Re-reads the folders on disk, keeping expanded folders expanded.
-    func reload() {
-        guard let root else { return }
+    /// Re-reads every folder listed so far, keeping expanded folders expanded.
+    @discardableResult
+    func reload() -> Task<Void, Never>? {
+        guard let root else { return nil }
         needsReload = false
-        keepingExpansion {
-            root.invalidate()
-            outline.reloadData()
+        return list(root.listedFolders) { [weak self] found in
+            self?.keepingExpansion {
+                for (node, entries) in found { node.takeChildren(entries) }
+                self?.outline.reloadData()
+            }
         }
+    }
+
+    /// Lists folders off the main thread, then hands back the listings still
+    /// current: a folder listed again meanwhile keeps only the newer one.
+    @discardableResult
+    private func list(
+        _ nodes: [FileNode],
+        then show: @escaping ([(node: FileNode, entries: [FileNode.Entry])]) -> Void
+    ) -> Task<Void, Never> {
+        let tickets = nodes.map { $0.beginListing() }
+        let urls = nodes.map(\.url)
+        let listFolder = listFolder
+        let id = nextListing
+        nextListing += 1
+        let task = Task { [weak self] in
+            let listings = await Task.detached(priority: .userInitiated) { urls.map(listFolder) }.value
+            self?.listings[id] = nil
+            let current = zip(nodes, zip(tickets, listings)).compactMap { node, listing in
+                node.endListing(listing.0) ? (node: node, entries: listing.1) : nil
+            }
+            if !current.isEmpty { show(current) }
+        }
+        listings[id] = task
+        return task
+    }
+
+    /// Lists a folder the first time it is looked into.
+    private func load(_ node: FileNode) {
+        guard node.isDirectory, node.listedChildren == nil, !node.isListing else { return }
+        list([node]) { [weak self] found in self?.takeIn(found) }
+    }
+
+    /// Takes in listings and shows what the folders now hold.
+    private func takeIn(_ found: [(node: FileNode, entries: [FileNode.Entry])]) {
+        for (node, entries) in found {
+            node.takeChildren(entries)
+            outline.reloadItem(node === root ? nil : node, reloadChildren: true)
+        }
+    }
+
+    /// Waits until every folder being listed has been taken in, including
+    /// any listed in turn as expanded folders are opened again.
+    func finishListing() async {
+        while let listing = listings.values.first { await listing.value }
     }
 
     /// Follows changes on disk. Only folders the tree has listed are read
@@ -101,11 +156,9 @@ final class FileTreeView: NSView {
         }
         let nodes = Set(paths).compactMap { listedNode(atReportedPath: $0, under: root) }
         guard !nodes.isEmpty else { return }
-        keepingExpansion {
-            for node in nodes {
-                node.refreshChildren()
-                outline.reloadItem(node === root ? nil : node, reloadChildren: true)
-            }
+        list(nodes) { [weak self] found in
+            guard let self else { return }
+            keepingExpansion { self.takeIn(found) }
         }
     }
 
@@ -149,8 +202,10 @@ final class FileTreeView: NSView {
         if let selected { reveal(selected, expanding: false) }
     }
 
-    /// Selects a file's row, expanding its folders when asked.
+    /// Selects a file's row, expanding its folders when asked. Folders not
+    /// listed yet are listed first, and the reveal carries on once they are.
     func reveal(_ url: URL, expanding: Bool = true) {
+        if expanding { pendingReveal = nil }
         guard let root else { return }
         let target = url.standardizedFileURL.path
         guard target.hasPrefix(root.url.standardizedFileURL.path + "/") else {
@@ -159,6 +214,16 @@ final class FileTreeView: NSView {
         }
         var node = root
         while true {
+            if node.listedChildren == nil, expanding {
+                pendingReveal = url
+                list([node]) { [weak self] found in
+                    guard let self else { return }
+                    takeIn(found)
+                    // Unless another reveal came since.
+                    if pendingReveal == url { reveal(url) }
+                }
+                return
+            }
             guard let next = node.children.first(where: { target == $0.path || target.hasPrefix($0.path + "/") }) else { break }
             if next.path == target {
                 let row = outline.row(forItem: next)
@@ -227,8 +292,11 @@ final class FileTreeView: NSView {
         }
         do {
             try Data().write(to: target, options: .withoutOverwriting)
-            reload()
-            reveal(target)
+            let reloading = reload()
+            Task { [weak self] in
+                await reloading?.value
+                self?.reveal(target)
+            }
             onOpenFile?(target)
         } catch {
             if let window { NSAlert(error: error).beginSheetModal(for: window) }
@@ -242,8 +310,14 @@ final class FileTreeView: NSView {
 }
 
 extension FileTreeView: NSOutlineViewDataSource, NSOutlineViewDelegate {
+    /// A folder not listed yet shows nothing until its listing comes in.
     func outlineView(_ outlineView: NSOutlineView, numberOfChildrenOfItem item: Any?) -> Int {
-        ((item as? FileNode) ?? root)?.children.count ?? 0
+        guard let node = (item as? FileNode) ?? root else { return 0 }
+        guard let children = node.listedChildren else {
+            load(node)
+            return 0
+        }
+        return children.count
     }
 
     func outlineView(_ outlineView: NSOutlineView, child index: Int, ofItem item: Any?) -> Any {
@@ -302,12 +376,16 @@ func realPath(_ path: String) -> String {
     return String(cString: resolved)
 }
 
-/// A folder or file in the tree. Folders list their children on first use.
+/// A folder or file in the tree. Folders are listed on first use, by the tree.
+@MainActor
 final class FileNode: NSObject {
     let url: URL
     let isDirectory: Bool
     let path: String
     private var loadedChildren: [FileNode]?
+    /// Counts listings asked for, so only the latest one is taken in.
+    private var listingTicket = 0
+    private(set) var isListing = false
 
     init(url: URL, isDirectory: Bool) {
         self.url = url
@@ -315,47 +393,64 @@ final class FileNode: NSObject {
         path = url.standardizedFileURL.path
     }
 
+    /// What listing a folder finds, made off the main thread.
+    struct Entry: Sendable {
+        let url: URL
+        let isDirectory: Bool
+    }
+
     /// Folders first, then markdown files, each in Finder order. Hidden and
     /// dependency folders are left out.
-    var children: [FileNode] {
-        if let loadedChildren { return loadedChildren }
-        guard isDirectory else { return [] }
+    nonisolated static func list(_ url: URL) -> [Entry] {
         let contents = (try? FileManager.default.contentsOfDirectory(
             at: url,
             includingPropertiesForKeys: [.isDirectoryKey, .isPackageKey],
             options: [.skipsHiddenFiles]
         )) ?? []
-        let nodes = contents.compactMap { child -> FileNode? in
+        let entries = contents.compactMap { child -> Entry? in
             let values = try? child.resourceValues(forKeys: [.isDirectoryKey, .isPackageKey])
             let isFolder = (values?.isDirectory ?? false) && !(values?.isPackage ?? false)
-            if isFolder { return Workspace.skippedFolders.contains(child.lastPathComponent) ? nil : FileNode(url: child, isDirectory: true) }
-            return Workspace.isMarkdown(child) ? FileNode(url: child, isDirectory: false) : nil
+            if isFolder { return Workspace.skippedFolders.contains(child.lastPathComponent) ? nil : Entry(url: child, isDirectory: true) }
+            return Workspace.isMarkdown(child) ? Entry(url: child, isDirectory: false) : nil
         }
-        let sorted = nodes.sorted { lhs, rhs in
+        return entries.sorted { lhs, rhs in
             if lhs.isDirectory != rhs.isDirectory { return lhs.isDirectory }
             return lhs.url.lastPathComponent.localizedStandardCompare(rhs.url.lastPathComponent) == .orderedAscending
         }
-        loadedChildren = sorted
-        return sorted
     }
+
+    /// The children as last listed; none before the first listing.
+    var children: [FileNode] { loadedChildren ?? [] }
 
     /// The children, if this folder has been listed.
     var listedChildren: [FileNode]? { loadedChildren }
 
-    /// Lists this folder again, keeping the nodes of children still there, so
-    /// what was listed below them stays listed.
-    func refreshChildren() {
-        guard let previous = loadedChildren else { return }
-        loadedChildren = nil
-        let kept = Dictionary(previous.map { ($0.path, $0) }, uniquingKeysWith: { first, _ in first })
-        loadedChildren = children.map { fresh in
-            kept[fresh.path].flatMap { $0.isDirectory == fresh.isDirectory ? $0 : nil } ?? fresh
-        }
+    /// This folder and every folder listed below it, each before those inside it.
+    var listedFolders: [FileNode] {
+        guard isDirectory else { return [] }
+        return [self] + children.flatMap(\.listedFolders).filter { $0.listedChildren != nil }
     }
 
-    /// Forgets loaded children everywhere below, so the next look re-reads disk.
-    func invalidate() {
-        loadedChildren?.forEach { $0.invalidate() }
-        loadedChildren = nil
+    func beginListing() -> Int {
+        listingTicket += 1
+        isListing = true
+        return listingTicket
+    }
+
+    /// Whether a listing is the latest asked for, and so to be taken in.
+    func endListing(_ ticket: Int) -> Bool {
+        guard ticket == listingTicket else { return false }
+        isListing = false
+        return true
+    }
+
+    /// Takes in a listing, keeping the nodes of children still there, so
+    /// what was listed below them stays listed.
+    func takeChildren(_ entries: [Entry]) {
+        let kept = Dictionary((loadedChildren ?? []).map { ($0.path, $0) }, uniquingKeysWith: { first, _ in first })
+        loadedChildren = entries.map { entry in
+            let fresh = FileNode(url: entry.url, isDirectory: entry.isDirectory)
+            return kept[fresh.path].flatMap { $0.isDirectory == fresh.isDirectory ? $0 : nil } ?? fresh
+        }
     }
 }

@@ -17,11 +17,11 @@ struct WindowFlowTests {
     }
 
     /// A saved file with unsaved edits, open in a window.
-    private func openEdited(_ name: String, in controller: MainWindowController) throws -> Document {
+    private func openEdited(_ name: String, in controller: MainWindowController) async throws -> Document {
         try FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: true)
         let url = scratch.appendingPathComponent(name)
         try "saved\n".write(to: url, atomically: true, encoding: .utf8)
-        controller.open(url: url)
+        await controller.open(url: url)?.value
         let document = try #require(controller.documents.first { $0.url == url })
         document.storage.replaceCharacters(in: NSRange(location: 0, length: 0), with: "edited ")
         #expect(document.isDirty)
@@ -40,10 +40,10 @@ struct WindowFlowTests {
     }
 
     @Test("Closing an unsaved tab asks; Cancel keeps it, Don’t Save closes it")
-    func closeTab() throws {
+    func closeTab() async throws {
         let controller = makeWindow()
         controller.newDocument()
-        let document = try openEdited("close.md", in: controller)
+        let document = try await openEdited("close.md", in: controller)
         let count = controller.documents.count
         let index = try #require(controller.documents.firstIndex { $0 === document })
 
@@ -70,10 +70,10 @@ struct WindowFlowTests {
     }
 
     @Test("Save in the prompt writes the file before the tab goes")
-    func saveOnClose() throws {
+    func saveOnClose() async throws {
         let controller = makeWindow()
         controller.newDocument()
-        let document = try openEdited("save.md", in: controller)
+        let document = try await openEdited("save.md", in: controller)
         _ = script(controller, [.save])
         controller.closeDocument(at: try #require(controller.documents.firstIndex { $0 === document }))
         #expect(!controller.documents.contains { $0 === document })
@@ -81,10 +81,10 @@ struct WindowFlowTests {
     }
 
     @Test("Quitting reviews every window in turn and stops at the first Cancel")
-    func quitReview() throws {
+    func quitReview() async throws {
         let first = makeWindow(), second = makeWindow()
-        _ = try openEdited("one.md", in: first)
-        _ = try openEdited("two.md", in: second)
+        _ = try await openEdited("one.md", in: first)
+        _ = try await openEdited("two.md", in: second)
         let clean = makeWindow()
         clean.newDocument()
 
@@ -111,10 +111,10 @@ struct WindowFlowTests {
     /// "Don't Save" in one window, Cancel in the next: closing the first
     /// window later skipped its prompt and dropped its recovery snapshot.
     @Test("After a cancelled quit, closing a window still asks about its unsaved text")
-    func cancelledQuitThenClose() throws {
+    func cancelledQuitThenClose() async throws {
         let first = makeWindow(), second = makeWindow()
-        _ = try openEdited("kept.md", in: first)
-        _ = try openEdited("other.md", in: second)
+        _ = try await openEdited("kept.md", in: first)
+        _ = try await openEdited("other.md", in: second)
         _ = script(first, [.discard])
         _ = script(second, [.cancel])
         MainWindowController.reviewUnsavedChanges(in: [first, second]) { _ in }
@@ -128,9 +128,9 @@ struct WindowFlowTests {
     /// recovered edits were laid over the new text as if made to it, and
     /// saving them undid the change unseen.
     @Test("Recovered edits to a file changed since ask before standing in for it")
-    func recoveryOverChangedFile() throws {
+    func recoveryOverChangedFile() async throws {
         let crashed = makeWindow()
-        let document = try openEdited("synced.md", in: crashed)
+        let document = try await openEdited("synced.md", in: crashed)
         crashed.askAboutExternalChange = { _, answer in answer(false) }
         crashed.writeRecoverySnapshots(rewriting: true)
         let snapshots = crashed.recovery.snapshots().filter { $0.id == document.id }
@@ -140,14 +140,15 @@ struct WindowFlowTests {
         let quiet = makeWindow()
         var asked = 0
         quiet.askAboutExternalChange = { _, answer in asked += 1; answer(false) }
-        quiet.restore(snapshots: snapshots)
+        await quiet.restore(snapshots: snapshots)
         #expect(asked == 0)
         #expect(quiet.documents.contains { $0.text == "edited saved\n" })
 
         try "pulled\n".write(to: document.url!, atomically: true, encoding: .utf8)
         let relaunched = makeWindow()
         relaunched.askAboutExternalChange = { _, answer in asked += 1; answer(true) }
-        relaunched.restore(snapshots: snapshots)
+        await relaunched.restore(snapshots: snapshots)
+        await relaunched.finishReading()
         #expect(asked == 1)
         let restored = try #require(relaunched.documents.first { $0.url == document.url })
         #expect(restored.text == "pulled\n")
@@ -157,12 +158,12 @@ struct WindowFlowTests {
     /// The file's own encoding cannot hold an emoji; without a way out,
     /// every save and Save As failed and the text could never be saved.
     @Test("Text a legacy encoding cannot hold is saved as UTF-8 once agreed to")
-    func saveAsUTF8() throws {
+    func saveAsUTF8() async throws {
         try FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: true)
         let url = scratch.appendingPathComponent("latin.md")
         try #require("café\n".data(using: .isoLatin1)).write(to: url)
         let controller = makeWindow()
-        controller.open(url: url)
+        await controller.open(url: url)?.value
         let document = try #require(controller.documents.first { $0.url == url })
         #expect(document.format.encoding != .utf8)
         document.storage.replaceCharacters(in: NSRange(location: 0, length: 0), with: "😀 ")
@@ -194,10 +195,10 @@ struct WindowFlowTests {
     }
 
     @Test("A torn-off tab keeps its unsaved text and its undo history")
-    func tearOff() throws {
+    func tearOff() async throws {
         let source = makeWindow()
         source.newDocument()
-        let document = try openEdited("moving.md", in: source)
+        let document = try await openEdited("moving.md", in: source)
         document.undoManager.groupsByEvent = false
         document.undoManager.beginUndoGrouping()
         let editor = EditorViewController(textStorage: document.storage, undoManager: document.undoManager)
@@ -225,9 +226,9 @@ struct WindowFlowTests {
     }
 
     @Test("A lone tab is not torn off: it already has its window")
-    func tearOffLoneTab() throws {
+    func tearOffLoneTab() async throws {
         let controller = makeWindow()
-        _ = try openEdited("alone.md", in: controller)
+        _ = try await openEdited("alone.md", in: controller)
         var moved = false
         controller.onMoveToNewWindow = { _ in moved = true }
         controller.moveTabToNewWindow(nil)
@@ -236,9 +237,9 @@ struct WindowFlowTests {
     }
 
     @Test("Recovery writes only documents changed since their last snapshot")
-    func recoveryWritesChanges() throws {
+    func recoveryWritesChanges() async throws {
         let controller = makeWindow()
-        let document = try openEdited("recover.md", in: controller)
+        let document = try await openEdited("recover.md", in: controller)
         let snapshot = scratch.appendingPathComponent("Recovery/\(document.id.uuidString).json")
         func recorded() -> String? { controller.recovery.snapshots().first { $0.id == document.id }?.text }
 
@@ -282,10 +283,10 @@ struct WindowFlowTests {
     }
 
     @Test("Reopen Closed Tab brings back the most recently closed file")
-    func reopenClosedTab() throws {
+    func reopenClosedTab() async throws {
         let controller = makeWindow()
-        let first = try openEdited("first.md", in: controller)
-        let second = try openEdited("second.md", in: controller)
+        let first = try await openEdited("first.md", in: controller)
+        let second = try await openEdited("second.md", in: controller)
         script(controller, [.discard, .discard])()
         let urls = [first.url, second.url]
         controller.closeDocument(at: controller.documents.firstIndex { $0 === first }!)
@@ -293,13 +294,90 @@ struct WindowFlowTests {
         #expect(controller.documents.allSatisfy { !urls.contains($0.url) })
 
         controller.reopenClosedTab(nil)
+        await controller.finishReading()
         #expect(controller.activeDocument?.url == second.url)
         controller.reopenClosedTab(nil)
+        await controller.finishReading()
         #expect(controller.activeDocument?.url == first.url)
     }
 
+    /// Opening read the file on the main thread, so one still in iCloud or
+    /// on a slow volume froze the window until it arrived.
+    @Test("Opening a slow file leaves the window free, and asking twice opens it once")
+    func openOffMainThread() async throws {
+        try FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: true)
+        let url = scratch.appendingPathComponent("slow.md")
+        try "slow\n".write(to: url, atomically: true, encoding: .utf8)
+        let controller = makeWindow()
+        let gate = SlowGate()
+        controller.readFile = { url in
+            gate.pass()
+            return try Data(contentsOf: url)
+        }
+
+        let first = try #require(controller.open(url: url))
+        #expect(controller.open(url: url) == first)
+        #expect(!controller.contains(url))
+        try await gate.waitForReads()
+
+        gate.open()
+        await first.value
+        #expect(controller.documents.filter { $0.url == url }.count == 1)
+        #expect(controller.activeDocument?.text == "slow\n")
+        // Open now: brought forward, not read again.
+        #expect(controller.open(url: url) == nil)
+        #expect(gate.calls == 1)
+        #expect(!gate.ranOnMainThread)
+        #expect(!gate.gaveUp)
+    }
+
+    /// Restoring read every tab's file in turn on the main thread, so the
+    /// app sat frozen at launch until the slowest had arrived.
+    @Test("Restoring reads files off the main thread and keeps their order and selection")
+    func restoreOffMainThread() async throws {
+        try FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: true)
+        let tabs = try (0..<3).map { index -> Session.Tab in
+            let url = scratch.appendingPathComponent("slow\(index).md")
+            try "file \(index)\n".write(to: url, atomically: true, encoding: .utf8)
+            return Session.Tab(url: url, selectedLocation: 0, sourceMode: nil, typewriterMode: nil, focusMode: nil)
+        }
+        let window = Session.Window(tabs: tabs, selectedIndex: 1, workspace: nil, frame: nil)
+        func slowWindow() -> (MainWindowController, SlowGate) {
+            let controller = makeWindow()
+            let gate = SlowGate()
+            controller.readFile = { url in
+                gate.pass()
+                return try Data(contentsOf: url)
+            }
+            return (controller, gate)
+        }
+
+        let (controller, gate) = slowWindow()
+        let restoring = Task { await controller.restore(window) }
+        try await gate.waitForReads(3)
+        #expect(!controller.documents.contains { $0.url != nil })
+        gate.open()
+        await restoring.value
+        #expect(controller.documents.map(\.url) == tabs.map(\.url))
+        #expect(controller.activeDocument?.url == tabs[1].url)
+        #expect(gate.calls == 3)
+        #expect(!gate.ranOnMainThread)
+        #expect(!gate.gaveUp)
+
+        // Opened again while the session is still being read: one tab, not two.
+        let (other, otherGate) = slowWindow()
+        let restoringOther = Task { await other.restore(window) }
+        try await otherGate.waitForReads(3)
+        let opening = other.open(url: tabs[0].url)
+        otherGate.open()
+        await restoringOther.value
+        await opening?.value
+        #expect(other.documents.map(\.url) == tabs.map(\.url))
+        #expect(!otherGate.gaveUp)
+    }
+
     @Test("Restoring a session makes an editor only for the tab it shows, and keeps the rest as saved")
-    func restoreIsLazy() throws {
+    func restoreIsLazy() async throws {
         try FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: true)
         let tabs = try (0..<3).map { index -> Session.Tab in
             let url = scratch.appendingPathComponent("restored\(index).md")
@@ -307,7 +385,7 @@ struct WindowFlowTests {
             return Session.Tab(url: url, selectedLocation: 10 * (index + 1), sourceMode: index == 2, typewriterMode: nil, focusMode: nil)
         }
         let controller = makeWindow()
-        controller.restore(Session.Window(tabs: tabs, selectedIndex: 1, workspace: nil, frame: nil))
+        await controller.restore(Session.Window(tabs: tabs, selectedIndex: 1, workspace: nil, frame: nil))
         #expect(controller.documents.map(\.url) == tabs.map(\.url))
         #expect(controller.activeDocument?.url == tabs[1].url)
         #expect(controller.editorCount == 1)

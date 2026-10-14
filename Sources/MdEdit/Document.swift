@@ -42,6 +42,16 @@ struct FileFormat: Equatable {
         return (raw, format)
     }
 
+    /// Reads and decodes a file away from the main thread: a file still
+    /// downloading from iCloud, or on a slow or remote volume, would
+    /// otherwise stall the whole app until it arrived.
+    static func read(
+        _ url: URL,
+        using load: @escaping @Sendable (URL) throws -> Data = { try Data(contentsOf: $0) }
+    ) async throws -> (text: String, format: FileFormat) {
+        try await Task.detached(priority: .userInitiated) { try decode(load(url)) }.value
+    }
+
     /// Encodes editor text the way it was read. Throws rather than silently
     /// changing encoding when the text no longer fits the original one.
     func encode(_ text: String) throws -> Data {
@@ -121,16 +131,23 @@ final class Document {
 
     private var pendingExternalChange: DispatchWorkItem?
 
-    /// Re-reads the file, discarding whatever is in the editor.
-    func revert() throws {
-        guard let url else { return }
-        let (text, format) = try FileFormat.decode(Data(contentsOf: url))
+    /// Re-reads the file, discarding whatever is in the editor. Returns false,
+    /// leaving the editor alone, when the text was edited or the document
+    /// saved elsewhere while the file was being read.
+    @discardableResult
+    func revert(
+        using load: @escaping @Sendable (URL) throws -> Data = { try Data(contentsOf: $0) }
+    ) async throws -> Bool {
+        guard let url else { return true }
+        let generation = storage.editGeneration
+        let (text, format) = try await FileFormat.read(url, using: load)
+        guard storage.editGeneration == generation, self.url == url else { return false }
         // Touched, or rewritten as it was (a sync, a checkout): reloading
         // would restyle the whole document for nothing.
         if text == savedText, !isDirty {
             self.format = format
             isMissingOnDisk = false
-            return
+            return true
         }
         storage.replaceCharacters(in: NSRange(location: 0, length: storage.length), with: text)
         // The history was of the old text: undoing it here would replay its
@@ -139,6 +156,7 @@ final class Document {
         savedText = text
         self.format = format
         isMissingOnDisk = false
+        return true
     }
 
     /// Identifies the text last read from or written to disk, for telling
@@ -181,8 +199,13 @@ final class Document {
         url?.lastPathComponent ?? untitledName ?? String(localized: "Untitled")
     }
 
-    static func open(contentsOf url: URL, theme: Theme) throws -> Document {
-        let (text, format) = try FileFormat.decode(Data(contentsOf: url))
+    static func open(contentsOf url: URL, theme: Theme) async throws -> Document {
+        open(url, read: try await FileFormat.read(url), theme: theme)
+    }
+
+    /// A document for a file whose contents have already been read.
+    static func open(_ url: URL, read: (text: String, format: FileFormat), theme: Theme) -> Document {
+        let (text, format) = read
         FileAccess.remember(url)
         let document = Document(url: url, text: text, theme: theme)
         document.format = format
