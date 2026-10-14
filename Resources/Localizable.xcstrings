@@ -577,6 +577,9 @@
     "Save As…" : {
 
     },
+    "Save as UTF-8" : {
+
+    },
     "Save changes to “%@” before closing?" : {
 
     },
@@ -630,6 +633,9 @@
 
     },
     "Size:" : {
+
+    },
+    "Some of its text has no %@ form. Saving it as UTF-8 keeps all of it." : {
 
     },
     "Source Mode" : {
@@ -828,6 +834,16 @@
     },
     "unchecked" : {
 
+    },
+    "“%@” can’t be saved as %@." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "“%1$@” can’t be saved as %2$@."
+          }
+        }
+      }
     },
     "“%@” changed on disk." : {
 

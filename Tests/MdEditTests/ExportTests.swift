@@ -131,6 +131,20 @@ struct ExportTests {
         #expect(arguments == ["--from", "markdown", "--to", "epub", "--standalone", "--output", "-", "--resource-path", "/docs", "--toc"])
     }
 
+    /// A Pandoc that exits without reading left the app writing into a
+    /// closed pipe, which killed it with SIGPIPE.
+    @Test("A converter that quits without reading its input fails the export, not the app")
+    func pandocExitsEarly() async {
+        let format = Pandoc.formats.first { $0.writer == "docx" }!
+        let markdown = String(repeating: "A paragraph longer than a pipe's buffer.\n\n", count: 20_000)
+        await #expect(throws: Pandoc.Failure.self) {
+            try await Pandoc.convert(
+                markdown: markdown, to: format, executable: URL(fileURLWithPath: "/usr/bin/false"),
+                resourceDirectory: nil, tableOfContents: false
+            )
+        }
+    }
+
     @Test("Pandoc's output comes back to the app to write", .enabled(if: Pandoc.executable != nil))
     func pandocConvert() async throws {
         let word = Pandoc.formats.first { $0.writer == "docx" }!

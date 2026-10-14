@@ -46,4 +46,13 @@ struct HTMLToMarkdownTests {
         // An editor's syntax-coloured code has nothing worth converting.
         #expect(md("<div><span style=\"color:#f00\">let</span> x = 1</div>") == nil)
     }
+
+
+    /// Counting on from Int.max trapped; markdown allows nine digits anyway.
+    @Test("A list's start number is kept within what markdown allows")
+    func hugeListStart() {
+        #expect(md("<ol start=\"9223372036854775807\"><li>a</li><li>b</li></ol>") == "999999999. a\n1000000000. b")
+        #expect(md("<ol start=\"-3\"><li>a</li></ol>") == "0. a")
+        #expect(md("<ol start=\"4\"><li>a</li></ol>") == "4. a")
+    }
 }

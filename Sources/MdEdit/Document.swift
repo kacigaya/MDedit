@@ -128,6 +128,9 @@ final class Document {
             return
         }
         storage.replaceCharacters(in: NSRange(location: 0, length: storage.length), with: text)
+        // The history was of the old text: undoing it here would replay its
+        // ranges onto text they no longer fit.
+        undoManager.removeAllActions()
         savedText = text
         self.format = format
         isMissingOnDisk = false
@@ -138,6 +141,7 @@ final class Document {
     func restoreUnsavedText(_ text: String) {
         guard text != storage.string else { return }
         storage.replaceCharacters(in: NSRange(location: 0, length: storage.length), with: text)
+        undoManager.removeAllActions()
     }
 
     func markMissingOnDisk() {

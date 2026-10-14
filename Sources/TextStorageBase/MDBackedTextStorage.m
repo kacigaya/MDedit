@@ -30,6 +30,10 @@
 }
 
 - (nullable id)attribute:(NSAttributedStringKey)name atIndex:(NSUInteger)location effectiveRange:(NSRangePointer)range {
+    if (_backing.length == 0) {
+        if (range) *range = NSMakeRange(0, 0);
+        return nil;
+    }
     return [_backing attribute:name atIndex:location effectiveRange:range];
 }
 
@@ -40,6 +44,10 @@
     // any to find.
     if ([name isEqualToString:NSGlyphInfoAttributeName]) {
         if (range) *range = rangeLimit;
+        return nil;
+    }
+    if (_backing.length == 0) {
+        if (range) *range = NSMakeRange(0, 0);
         return nil;
     }
     return [_backing attribute:name atIndex:location longestEffectiveRange:range inRange:rangeLimit];

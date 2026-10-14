@@ -814,12 +814,16 @@ enum Pandoc {
                 continuation.finish()
             }
         }
+        // Pandoc can exit without reading its input (an unknown writer, a
+        // crash): writing on into the closed pipe must fail, not kill the app.
+        signal(SIGPIPE, SIG_IGN)
         try process.run()
         // Fed and drained off the main thread, so neither pipe can fill and stall.
         let writer = input.fileHandleForWriting
         let data = Data(markdown.utf8)
         DispatchQueue.global(qos: .userInitiated).async {
-            writer.write(data)
+            // The throwing write: the legacy one raises on a closed pipe.
+            try? writer.write(contentsOf: data)
             try? writer.close()
         }
         let reader = errors.fileHandleForReading

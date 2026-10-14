@@ -83,14 +83,61 @@ struct WindowFlowTests {
         #expect(result == false)
         #expect(askedFirst() == ["one.md"])
         #expect(askedSecond() == ["two.md"])
-        // The window that was answered for is not asked again; the cancelled one is.
-        #expect(!first.hasUnreviewedChanges)
+        // The quit is off, so the answer given for it no longer stands:
+        // both windows still hold unsaved text and ask again.
+        #expect(first.hasUnreviewedChanges)
         #expect(second.hasUnreviewedChanges)
 
-        let askedAgain = script(second, [.discard])
+        let askedFirstAgain = script(first, [.discard])
+        let askedSecondAgain = script(second, [.discard])
         MainWindowController.reviewUnsavedChanges(in: [first, clean, second]) { result = $0 }
         #expect(result == true)
-        #expect(askedAgain() == ["two.md"])
+        #expect(askedFirstAgain() == ["one.md"])
+        #expect(askedSecondAgain() == ["two.md"])
+    }
+
+    /// "Don't Save" in one window, Cancel in the next: closing the first
+    /// window later skipped its prompt and dropped its recovery snapshot.
+    @Test("After a cancelled quit, closing a window still asks about its unsaved text")
+    func cancelledQuitThenClose() throws {
+        let first = makeWindow(), second = makeWindow()
+        _ = try openEdited("kept.md", in: first)
+        _ = try openEdited("other.md", in: second)
+        _ = script(first, [.discard])
+        _ = script(second, [.cancel])
+        MainWindowController.reviewUnsavedChanges(in: [first, second]) { _ in }
+
+        let asked = script(first, [.cancel])
+        #expect(first.windowShouldClose(first.window!) == false)
+        #expect(asked() == ["kept.md"])
+    }
+
+    /// The file's own encoding cannot hold an emoji; without a way out,
+    /// every save and Save As failed and the text could never be saved.
+    @Test("Text a legacy encoding cannot hold is saved as UTF-8 once agreed to")
+    func saveAsUTF8() throws {
+        try FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: true)
+        let url = scratch.appendingPathComponent("latin.md")
+        try #require("café\n".data(using: .isoLatin1)).write(to: url)
+        let controller = makeWindow()
+        controller.open(url: url)
+        let document = try #require(controller.documents.first { $0.url == url })
+        #expect(document.format.encoding != .utf8)
+        document.storage.replaceCharacters(in: NSRange(location: 0, length: 0), with: "😀 ")
+
+        var answers = [false, true]
+        controller.askToConvertToUTF8 = { _, answer in answer(answers.removeFirst()) }
+        var saved: Bool?
+        controller.save(document: document) { saved = $0 }
+        #expect(saved == false)
+        #expect(document.isDirty)
+        #expect(try Data(contentsOf: url) == "café\n".data(using: .isoLatin1))
+
+        controller.save(document: document) { saved = $0 }
+        #expect(saved == true)
+        #expect(!document.isDirty)
+        #expect(document.format.encoding == .utf8)
+        #expect(try String(contentsOf: url, encoding: .utf8) == "😀 café\n")
     }
 
     @Test("Quitting with nothing unsaved asks nothing")

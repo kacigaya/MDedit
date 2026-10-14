@@ -163,4 +163,29 @@ struct RevertTests {
         #expect(document.text == "# Changed\n")
         #expect(!document.isDirty)
     }
+
+
+    /// The history was of the text before the reload; undoing it afterwards
+    /// replayed its ranges onto the new text, past its end.
+    @Test("Reloading from disk clears the undo history, so Undo cannot crash")
+    func revertClearsUndo() throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("MdEditRevert-\(UUID().uuidString).md")
+        try "A line of text long enough to type after.\n".write(to: url, atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(at: url) }
+        let document = try Document.open(contentsOf: url, theme: .light)
+        let editor = EditorViewController(textStorage: document.storage, undoManager: document.undoManager)
+        _ = editor.view
+        document.undoManager.groupsByEvent = false
+        editor.textView.setSelectedRange(NSRange(location: 42, length: 0))
+        document.undoManager.beginUndoGrouping()
+        editor.textView.insertText(" More typed text.", replacementRange: editor.textView.selectedRange())
+        document.undoManager.endUndoGrouping()
+        try document.save()
+
+        try "Hi\n".write(to: url, atomically: true, encoding: .utf8)
+        try document.revert()
+        #expect(!document.undoManager.canUndo)
+        document.undoManager.undo()
+        #expect(document.text == "Hi\n")
+    }
 }

@@ -122,7 +122,10 @@ private struct Converter {
     }
 
     private func list(_ element: XMLElement, ordered: Bool) -> String {
-        var number = Int(element.attribute(forName: "start")?.stringValue ?? "") ?? 1
+        // CommonMark list numbers have at most nine digits; a page's `start`
+        // can be anything, and counting on from Int.max would trap.
+        let start = Int(element.attribute(forName: "start")?.stringValue?.trimmingCharacters(in: .whitespaces) ?? "") ?? 1
+        var number = min(max(start, 0), 999_999_999)
         var lines: [String] = []
         for case let item as XMLElement in element.children ?? [] where item.name?.lowercased() == "li" {
             let marker = ordered ? "\(number). " : "- "

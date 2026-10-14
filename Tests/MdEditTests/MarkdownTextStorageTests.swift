@@ -164,4 +164,14 @@ struct MarkdownTextStorageTests {
         let whole = NSRange(location: 0, length: fresh.length)
         #expect(changed.attributedSubstring(from: whole).isEqual(to: fresh.attributedSubstring(from: whole)))
     }
+
+
+    @Test("Asking an empty document for an attribute answers nothing rather than raising")
+    func emptyAttributeLookup() {
+        let storage = storage("")
+        var range = NSRange(location: 5, length: 5)
+        #expect(storage.attribute(.font, at: 0, effectiveRange: &range) == nil)
+        #expect(range == NSRange(location: 0, length: 0))
+        #expect(storage.attribute(.font, at: 0, longestEffectiveRange: &range, in: NSRange(location: 0, length: 0)) == nil)
+    }
 }

@@ -68,6 +68,11 @@ final class MainWindowController: NSWindowController {
     lazy var askAboutUnsaved: (Document, @escaping (UnsavedAnswer) -> Void) -> Void = { [weak self] document, answer in
         self?.presentUnsavedAlert(for: document, answer: answer)
     }
+    /// Asks whether to save a document as UTF-8 when its text no longer fits
+    /// the encoding it was read in; a sheet unless a test answers instead.
+    lazy var askToConvertToUTF8: (Document, @escaping (Bool) -> Void) -> Void = { [weak self] document, answer in
+        self?.presentConvertAlert(for: document, answer: answer)
+    }
     private var pendingSnapshot: DispatchWorkItem?
     /// Set once the user has answered for every unsaved document, so closing
     /// the window and the quit that follows do not ask twice.
@@ -552,15 +557,42 @@ final class MainWindowController: NSWindowController {
             saveAs(document: document, completion: completion)
             return
         }
+        write(document) { [weak self] saved in
+            if saved {
+                self?.refreshTabs()
+                self?.writeRecoverySnapshots()
+            }
+            completion?(saved)
+        }
+    }
+
+    /// Saves, offering UTF-8 when the text no longer fits the file's own
+    /// encoding: without that, every save and Save As would fail alike.
+    private func write(_ document: Document, to target: URL? = nil, completion: @escaping (Bool) -> Void) {
         do {
-            try document.save()
-            refreshTabs()
-            writeRecoverySnapshots()
-            completion?(true)
+            try document.save(to: target)
+            completion(true)
+        } catch let error as CocoaError where error.code == .fileWriteInapplicableStringEncoding && document.format.encoding != .utf8 {
+            askToConvertToUTF8(document) { [weak self] convert in
+                guard convert, let self else { return completion(false) }
+                document.format.encoding = .utf8
+                write(document, to: target, completion: completion)
+            }
         } catch {
             show(error: error)
-            completion?(false)
+            completion(false)
         }
+    }
+
+    private func presentConvertAlert(for document: Document, answer: @escaping (Bool) -> Void) {
+        guard let window else { return answer(false) }
+        let encoding = String.localizedName(of: document.format.encoding)
+        let alert = NSAlert()
+        alert.messageText = String(localized: "“\(document.displayName)” can’t be saved as \(encoding).")
+        alert.informativeText = String(localized: "Some of its text has no \(encoding) form. Saving it as UTF-8 keeps all of it.")
+        alert.addButton(withTitle: String(localized: "Save as UTF-8"))
+        alert.addButton(withTitle: String(localized: "Cancel"))
+        alert.beginSheetModal(for: window) { answer($0 == .alertFirstButtonReturn) }
     }
 
     func saveAs(document: Document, completion: ((Bool) -> Void)? = nil) {
@@ -573,17 +605,15 @@ final class MainWindowController: NSWindowController {
         panel.nameFieldStringValue = document.url?.lastPathComponent ?? document.displayName + ".md"
         panel.canCreateDirectories = true
         panel.beginSheetModal(for: window) { [weak self] response in
-            guard response == .OK, let url = panel.url else { return completion?(false) ?? () }
-            do {
-                try document.save(to: url)
-                self?.window?.title = document.displayName
-                self?.window?.representedURL = url
-                self?.refreshTabs()
-                self?.writeRecoverySnapshots()
-                completion?(true)
-            } catch {
-                self?.show(error: error)
-                completion?(false)
+            guard response == .OK, let url = panel.url, let self else { return completion?(false) ?? () }
+            write(document, to: url) { [weak self] saved in
+                if saved {
+                    self?.window?.title = document.displayName
+                    self?.window?.representedURL = url
+                    self?.refreshTabs()
+                    self?.writeRecoverySnapshots()
+                }
+                completion?(saved)
             }
         }
     }
@@ -864,7 +894,11 @@ final class MainWindowController: NSWindowController {
             guard let controller = remaining.next() else { return completion(true) }
             controller.window?.makeKeyAndOrderFront(nil)
             controller.reviewUnsavedChanges { proceed in
-                proceed ? next() : completion(false)
+                if proceed { return next() }
+                // The quit is off, so a "Don't Save" given for it no longer
+                // stands: closing those windows later must ask again.
+                for controller in controllers { controller.changesReviewed = false }
+                completion(false)
             }
         }
         next()
