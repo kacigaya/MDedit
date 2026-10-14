@@ -5,6 +5,8 @@ workflow publishes the section for a version as its release notes.
 
 ## [Unreleased]
 
+## [1.0.2] - 2026-10-14
+
 ### Fixed
 - The caret on an empty document is the same height as on a line of text.
   It was sized from the typing attributes, which carried no line height.
