@@ -90,4 +90,26 @@ struct LayoutTests {
             }
         }
     }
+
+    /// The caret on an empty document is sized from the typing attributes
+    /// alone; without the paragraph style those carry, it came out shorter
+    /// than the caret on the first typed line.
+    @Test("The caret is the same height before and after the first character")
+    func caretHeightOnEmptyDocument() throws {
+        let document = Document(theme: .light)
+        let editor = EditorViewController(textStorage: document.storage, undoManager: document.undoManager)
+        editor.view.frame = NSRect(x: 0, y: 0, width: 600, height: 400)
+        let textView = editor.textView
+        let manager = try #require(textView.layoutManager)
+        let container = try #require(textView.textContainer)
+
+        manager.ensureLayout(for: container)
+        let empty = manager.extraLineFragmentRect.height
+
+        textView.insertText("e", replacementRange: NSRange(location: 0, length: 0))
+        manager.ensureLayout(for: container)
+        let typed = manager.lineFragmentRect(forGlyphAt: 0, effectiveRange: nil).height
+
+        #expect(abs(empty - typed) < 0.01, "empty \(empty), typed \(typed)")
+    }
 }

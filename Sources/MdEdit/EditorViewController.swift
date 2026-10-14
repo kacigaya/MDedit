@@ -202,7 +202,17 @@ final class EditorViewController: NSViewController {
         // view's font and text colour: in a plain-text view those rewrite
         // every run of the document, wiping the styling (and taking half a
         // minute at 4.5 MB).
-        textView.typingAttributes = [.font: theme.body, .foregroundColor: theme.text]
+        // The paragraph style goes in too: the caret on an empty document, and
+        // on the empty last line, is sized from the typing attributes alone, so
+        // without it the caret is shorter there than on a styled line.
+        let typingStyle = NSMutableParagraphStyle()
+        typingStyle.lineHeightMultiple = theme.lineHeight
+        typingStyle.tighteningFactorForTruncation = 0
+        textView.typingAttributes = [
+            .font: theme.body,
+            .foregroundColor: theme.text,
+            .paragraphStyle: typingStyle.copy() as! NSParagraphStyle,
+        ]
         storage.theme = theme
         textView.selectedTextAttributes = [
             .backgroundColor: theme.accent.withAlphaComponent(0.25),
