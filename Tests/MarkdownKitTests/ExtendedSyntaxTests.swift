@@ -216,4 +216,14 @@ struct HeadingTests {
     func exportIDs() {
         #expect(html("# A b\n# A b") == "<h1 id=\"a-b\">A b</h1>\n<h1 id=\"a-b-1\">A b</h1>")
     }
+
+    /// The editor titled a setext heading by its last line alone, so a
+    /// contents link to a heading over several lines missed in export.
+    @Test("A setext heading over several lines is titled by all of them, as export has it")
+    func multilineSetext() {
+        let text = "Line one\nLine *two*\n===\n\nAfter" as NSString
+        let headings = BlockStructure(text: text).headings(in: text)
+        #expect(headings.map(\.title) == ["Line one Line two"])
+        #expect(html(text as String).hasPrefix("<h1 id=\"\(headings[0].slug)\">"))
+    }
 }

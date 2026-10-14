@@ -56,6 +56,14 @@ struct HTMLToMarkdownTests {
         #expect(md("<ol start=\"4\"><li>a</li></ol>") == "4. a")
     }
 
+    @Test("Links that run script lose their link, however the scheme is written")
+    func scriptLinks() {
+        for href in ["javascript:alert(1)", " JavaScript:alert(1)", "VBScript:x", "data:text/html,x"] {
+            #expect(md("<p><a href=\"\(href)\">click</a></p>") == "click", "\(href)")
+        }
+        #expect(md("<p><a href=\"https://x.dev\">site</a></p>") == "[site](https://x.dev)")
+    }
+
     /// Parsing nested markup recurses once per level: a page nested deep
     /// enough overflowed the stack and took the app down.
     @Test("Markup nested past any real page's depth pastes as text instead")

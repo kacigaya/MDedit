@@ -90,6 +90,17 @@ private struct Converter {
         "p", "div", "section", "article", "header", "footer", "main", "aside", "nav", "figure", "figcaption",
         "h1", "h2", "h3", "h4", "h5", "h6", "ul", "ol", "li", "blockquote", "pre", "table", "hr", "dl", "dt", "dd",
     ]
+    /// Links that run code rather than go somewhere. Browsers ignore case,
+    /// surrounding spaces and tabs or newlines inside the scheme, and so
+    /// does this.
+    static func runsScript(_ href: String) -> Bool {
+        let scheme = href.unicodeScalars
+            .filter { !CharacterSet.whitespacesAndNewlines.contains($0) && !CharacterSet.controlCharacters.contains($0) }
+            .prefix(12)
+        let lowered = String(String.UnicodeScalarView(scheme)).lowercased()
+        return ["javascript:", "vbscript:", "data:"].contains { lowered.hasPrefix($0) }
+    }
+
     private static let skippedTags: Set<String> = ["script", "style", "head", "meta", "title", "noscript", "template"]
 
     // MARK: - Blocks
@@ -254,7 +265,7 @@ private struct Converter {
             return text.isEmpty ? "" : fence + (fence == "``" ? " \(text) " : text) + fence
         case "a":
             let text = inner().trimmingCharacters(in: .whitespaces)
-            guard let href = element.attribute(forName: "href")?.stringValue, !href.isEmpty, !href.hasPrefix("javascript:")
+            guard let href = element.attribute(forName: "href")?.stringValue, !href.isEmpty, !Self.runsScript(href)
             else { return text }
             return text.isEmpty ? "" : "[\(text)](\(destination(href)))"
         case "img":

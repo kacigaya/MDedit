@@ -24,6 +24,19 @@ struct BlockParserTests {
         #expect(kinds("one\n- ") == [.paragraph, .setextUnderline(level: 2)])
     }
 
+    /// The editor showed any delimiter row under a paragraph line as a
+    /// table, where export wants the header's cells to match its count.
+    @Test("A delimiter row starts a table only under a header with as many cells")
+    func tableHeaderCount() {
+        let mismatched = BlockStructure(text: "a | b\n|-|\n" as NSString)
+        #expect(mismatched.info(forLine: 1)?.kind == .paragraph)
+        let matched = BlockStructure(text: "a | b\n|-|-|\n1 | 2\n" as NSString)
+        if case .tableDelimiter? = matched.info(forLine: 1)?.kind {} else { Issue.record("no table") }
+        #expect(matched.info(forLine: 2)?.kind == .tableRow)
+        let single = BlockStructure(text: "head\n---|\n" as NSString)
+        if case .tableDelimiter? = single.info(forLine: 1)?.kind {} else { Issue.record("one-cell table") }
+    }
+
     @Test("ATX headings")
     func headings() {
         #expect(kinds("# one") == [.atxHeading(level: 1)])

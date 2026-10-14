@@ -38,7 +38,13 @@ struct FileFormat: Equatable {
         if raw.contains("\r\n") {
             format.lineEnding = "\r\n"
             raw = raw.replacingOccurrences(of: "\r\n", with: "\n")
+        } else if raw.contains("\r") {
+            // Classic Mac line endings: the parser and the text view would
+            // otherwise disagree about where lines break.
+            format.lineEnding = "\r"
         }
+        // Any lone `\r` left, in a file that mixes endings, breaks a line too.
+        if raw.contains("\r") { raw = raw.replacingOccurrences(of: "\r", with: "\n") }
         return (raw, format)
     }
 

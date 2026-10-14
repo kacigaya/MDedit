@@ -125,7 +125,12 @@ extension MarkdownTextView {
         guard target >= 0, target < storage.structure.lineCount else { return NSSound.beep() }
         let column = from - storage.structure.index.range(ofLine: line).location
         let content = storage.structure.index.contentRange(ofLine: target, in: storage.text)
-        let location = content.location + min(column, content.length)
+        var location = content.location + min(column, content.length)
+        // A column counts UTF-16 units: one can fall inside an emoji or an
+        // accented letter, and typing there would split it.
+        if location < NSMaxRange(content) {
+            location = (storage.string as NSString).rangeOfComposedCharacterSequence(at: location).location
+        }
         additionalCarets = Array(Set(additionalCarets + [location]).subtracting([selectedRange().location])).sorted()
         scrollRangeToVisible(NSRange(location: location, length: 0))
     }

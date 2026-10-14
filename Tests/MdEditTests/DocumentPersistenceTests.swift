@@ -46,6 +46,18 @@ struct FileFormatTests {
         #expect(throws: (any Error).self) { try format.encode("naïve") }
     }
 
+    /// A lone `\r` ended a line for the text view but not for the parser,
+    /// so styling and line numbers disagreed with what showed.
+    @Test("Classic Mac line endings are edited as LF and written back as CR")
+    func carriageReturns() throws {
+        let data = Data("# A\r# B\r\rtext\r".utf8)
+        let (text, format) = try FileFormat.decode(data)
+        #expect(text == "# A\n# B\n\ntext\n")
+        #expect(format.lineEnding == "\r")
+        #expect(try format.encode(text) == data)
+        #expect(try FileFormat.decode(Data("a\r\nb\rc\n".utf8)).text == "a\nb\nc\n")
+    }
+
     /// A stray byte in UTF-8 text was read with a lossy guess: stand-ins for
     /// what it could not read, written over the original bytes on save.
     @Test("A file that is not valid UTF-8 is read in an encoding that keeps every byte")

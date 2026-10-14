@@ -300,4 +300,19 @@ struct TypingTests {
                                      color: storage.theme.text.cssString, dark: storage.theme.isDark, width: 0)
         #expect(!Typesetter.shared.isQueued(old))
     }
+
+    /// A definition added below left an earlier `[foo]` with no
+    /// destination until its own line was edited.
+    @Test("Adding a reference definition updates the links that use it")
+    func definitionUpdatesLinks() async throws {
+        let storage = MarkdownTextStorage(theme: .light)
+        storage.replaceCharacters(in: NSRange(location: 0, length: 0), with: "See [foo] here.\n\nMore.\n")
+        let location = 5
+        #expect((storage.attribute(.mdLink, at: location, effectiveRange: nil) as? String)?.isEmpty != false)
+        storage.replaceCharacters(in: NSRange(location: storage.length, length: 0), with: "\n[foo]: https://x.dev\n")
+        for _ in 0..<50 where storage.attribute(.mdLink, at: location, effectiveRange: nil) as? String != "https://x.dev" {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        #expect(storage.attribute(.mdLink, at: location, effectiveRange: nil) as? String == "https://x.dev")
+    }
 }

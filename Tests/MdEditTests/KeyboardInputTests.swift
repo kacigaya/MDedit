@@ -151,4 +151,29 @@ struct KeyboardInputTests {
         harness.editor.setHeading(level: 1)
         #expect(harness.document.text == "# first\nsecond\n")
     }
+
+    @Test("Pasted line endings become the editor's own")
+    func pastedCarriageReturns() {
+        let harness = Harness("")
+        harness.editor.textView.insertText("x\r\ny\rz", replacementRange: NSRange(location: 0, length: 0))
+        #expect(harness.document.text == "x\ny\nz")
+    }
+
+    /// The closing fence went in with the quote's `>`, the line between
+    /// without it, which ended the quote under the caret.
+    @Test("Closing a fence in a quote keeps the line inside the quote")
+    func fenceInQuote() {
+        let harness = Harness("> ```")
+        harness.editor.textView.doCommand(by: #selector(NSResponder.insertNewline(_:)))
+        #expect(harness.document.text == "> ```\n> \n> ```")
+        #expect(harness.editor.textView.selectedRange() == NSRange(location: 8, length: 0))
+    }
+
+    @Test("A caret added above lands beside an emoji, not inside it")
+    func caretBesideEmoji() {
+        let harness = Harness("😀ab\nxy")
+        harness.editor.textView.setSelectedRange(NSRange(location: 6, length: 0))
+        harness.editor.textView.addCaret(below: false)
+        #expect(harness.editor.textView.additionalCarets == [0])
+    }
 }

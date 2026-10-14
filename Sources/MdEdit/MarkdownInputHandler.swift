@@ -71,7 +71,9 @@ struct MarkdownInputHandler {
         if info.kind.isFenceStart, selection.location == lineRange.location + characters.count,
            let block = CodeBlock.containing(line: line, in: storage), block.closeLine == nil {
             let fence = fenceRun(characters)
-            let insertion = "\n\n" + fence.prefix + fence.run
+            // The line left for the code is inside the same quote or list
+            // item; without its prefix, it would end them.
+            let insertion = "\n" + fence.prefix + "\n" + fence.prefix + fence.run
             textView.insertText(insertion, replacementRange: selection)
             textView.setSelectedRange(NSRange(location: selection.location + 1 + (fence.prefix as NSString).length, length: 0))
             return true

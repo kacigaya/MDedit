@@ -104,6 +104,9 @@ public struct CarryState: Equatable, Sendable {
     public var fence: Fence?
     public var lists: [ListLevel]
     public var previousWasParagraph: Bool
+    /// How many cells the line above has, when it is paragraph text: a
+    /// delimiter row makes it a table header only when the counts match.
+    public var paragraphCells = 0
     public var previousWasBlank: Bool
     public var inTable: Bool
     /// Only the first line can open front matter.
@@ -496,6 +499,7 @@ public enum BlockParser {
                 contentStart = box.end
             }
             state.previousWasParagraph = true
+            state.paragraphCells = cellCount(line, from: contentStart)
             state.previousWasBlank = false
             state.inTable = false
             return LineInfo(
@@ -513,7 +517,8 @@ public enum BlockParser {
         popListLevels(&state.lists, toIndent: indent)
 
         // 10. Table delimiter, then rows until a blank line.
-        if state.previousWasParagraph, let alignments = tableDelimiter(line, from: bodyStart) {
+        if state.previousWasParagraph, let alignments = tableDelimiter(line, from: bodyStart),
+           alignments.count == state.paragraphCells {
             markers.append(Marker(range: NSRange(location: cursor, length: line.count - cursor), kind: .conceal))
             state.inTable = true
             state.previousWasParagraph = false
@@ -547,6 +552,7 @@ public enum BlockParser {
             markers.append(Marker(range: NSRange(location: bodyStart, length: footnote.labelEnd - bodyStart), kind: .label))
             // Lines that follow continue the footnote, as they would a paragraph.
             state.previousWasParagraph = true
+            state.paragraphCells = cellCount(line, from: footnote.contentStart)
             state.previousWasBlank = false
             state.inTable = false
             return LineInfo(
@@ -577,6 +583,7 @@ public enum BlockParser {
 
         // 11. Anything else is a paragraph.
         state.previousWasParagraph = true
+        state.paragraphCells = cellCount(line, from: bodyStart)
         state.previousWasBlank = false
         return LineInfo(
             kind: .paragraph,
@@ -588,4 +595,10 @@ public enum BlockParser {
             state: state
         )
     }
+}
+
+/// The cells a row would split into, as `MarkdownTable.cells(of:)` counts them.
+private func cellCount(_ line: [UInt16], from start: Int) -> Int {
+    guard start < line.count, contains(line, from: start, character: UInt16(ascii: "|")) else { return 1 }
+    return MarkdownTable.cells(of: string(line, from: start, to: line.count)).count
 }

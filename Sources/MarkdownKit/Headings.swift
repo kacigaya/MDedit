@@ -106,7 +106,22 @@ extension BlockStructure {
             }
             let characters = self.characters(of: text, line: line)
             if case .atxHeading = info.kind { end = headingContentEnd(info, characters) }
-            let title = plainText(characters, from: info.contentStart, to: end ?? characters.count)
+            var title = plainText(characters, from: info.contentStart, to: end ?? characters.count)
+            if info.kind == .paragraph {
+                // The whole paragraph above the rule is the heading, as export
+                // has it; its slug must agree with the one export writes.
+                var first = line
+                while first > 0, lines[first - 1].kind == .paragraph,
+                      lines[first - 1].quoteDepth == info.quoteDepth, lines[first - 1].listDepth == info.listDepth {
+                    first -= 1
+                }
+                if first < line {
+                    title = (first...line).map { other in
+                        let characters = self.characters(of: text, line: other)
+                        return plainText(characters, from: lines[other].contentStart, to: characters.count)
+                    }.joined(separator: " ")
+                }
+            }
             result.append(Heading(line: line, level: level, title: title, slug: slugs.slug(for: title)))
         }
         return result

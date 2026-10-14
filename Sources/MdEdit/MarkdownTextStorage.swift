@@ -206,8 +206,9 @@ final class MarkdownTextStorage: MDBackedTextStorage {
     /// nor made one: those below it just move. Nil when they must be found
     /// again, which means parsing every heading.
     private func headingsKept(_ old: [Heading], reparsed: ClosedRange<Int>, lineDelta: Int) -> [Heading]? {
-        // A setext heading's title is the line above its underline, so the
-        // lines either side of the edit count too.
+        // A setext heading's title is the paragraph above its underline, so
+        // the lines either side of the edit count too, and an edited
+        // paragraph counts when an underline ends it further down.
         let low = reparsed.lowerBound - 1
         let oldHigh = max(reparsed.lowerBound, reparsed.upperBound - lineDelta) + 1
         if old.contains(where: { $0.line >= low && $0.line <= oldHigh }) { return nil }
@@ -219,6 +220,12 @@ final class MarkdownTextStorage: MDBackedTextStorage {
                 default: continue
                 }
             }
+        }
+        var below = newHigh + 1
+        while below < structure.lineCount, structure.info(forLine: below)?.kind == .paragraph { below += 1 }
+        if below > newHigh + 1 || structure.info(forLine: newHigh)?.kind == .paragraph,
+           case .setextUnderline? = structure.info(forLine: below)?.kind {
+            return nil
         }
         guard lineDelta != 0 else { return old }
         return old.map { heading in
@@ -311,6 +318,35 @@ final class MarkdownTextStorage: MDBackedTextStorage {
     }
 
     private var isImageRestyleScheduled = false
+    private var isReferenceRestyleScheduled = false
+    /// Labels whose definition came, went or changed since the last restyle.
+    private var pendingReferenceLabels: Set<String> = []
+
+    private static func labelsChanged(from old: LinkReferences, to new: LinkReferences) -> Set<String> {
+        var labels = Set(old.links.keys).symmetricDifference(new.links.keys)
+        for (label, definition) in new.links where old.links[label].map({ $0 != definition }) ?? false { labels.insert(label) }
+        return labels.union(old.footnotes.symmetricDifference(new.footnotes))
+    }
+
+    /// Restyles the lines that mention a label: a `[label]` with no
+    /// definition is plain text, so no attribute marks where they are.
+    @objc private func restyleForReferences() {
+        isReferenceRestyleScheduled = false
+        let labels = pendingReferenceLabels
+        pendingReferenceLabels = []
+        let text = self.text
+        var lines = IndexSet()
+        for label in labels where !label.isEmpty {
+            var searched = NSRange(location: 0, length: text.length)
+            while searched.length > 0 {
+                let found = text.range(of: label, options: [.caseInsensitive, .literal], range: searched)
+                guard found.location != NSNotFound else { break }
+                lines.insert(line(at: found.location))
+                searched = NSRange(location: NSMaxRange(found), length: text.length - NSMaxRange(found))
+            }
+        }
+        restyle(lines: lines)
+    }
 
     @objc private func restyleForImages() {
         isImageRestyleScheduled = false
@@ -332,6 +368,10 @@ final class MarkdownTextStorage: MDBackedTextStorage {
                 lines.insert(integersIn: line(at: range.location)...line(at: NSMaxRange(range) - 1))
             }
         }
+        restyle(lines: lines)
+    }
+
+    private func restyle(lines: IndexSet) {
         let touched = lines.rangeView.compactMap { clampedLineRange($0.lowerBound...($0.upperBound - 1)) }.map(expandedToTypesetBlocks)
         guard !touched.isEmpty else { return }
         beginEditing()
@@ -409,7 +449,17 @@ final class MarkdownTextStorage: MDBackedTextStorage {
             let lineDelta = structure.lineCount - oldLineCount
             blockLookup = nil
             if structure.touchedDefinitions {
+                let previous = references
                 references = .collect(from: structure, requireDefinitions: false, extensions: extensions)
+                // Links elsewhere that use a definition just added, changed or
+                // removed would keep the destination they had until edited.
+                if references != previous {
+                    pendingReferenceLabels.formUnion(Self.labelsChanged(from: previous, to: references))
+                    if !isReferenceRestyleScheduled {
+                        isReferenceRestyleScheduled = true
+                        perform(#selector(restyleForReferences), with: nil, afterDelay: 0)
+                    }
+                }
             }
             headingNumberCache = nil
             cachedHeadings = cachedHeadings.flatMap { headingsKept($0, reparsed: updated, lineDelta: lineDelta) }

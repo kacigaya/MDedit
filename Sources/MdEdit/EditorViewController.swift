@@ -292,6 +292,15 @@ extension EditorViewController: NSTextViewDelegate {
         shouldChangeTextIn affectedCharRange: NSRange,
         replacementString: String?
     ) -> Bool {
+        // Pasted or dropped text keeps its own line endings; the editor's
+        // lines break at `\n` alone, as the parser counts them.
+        if let replacementString, replacementString.contains("\r"), !self.textView.isEditingAtCarets {
+            let normalized = replacementString
+                .replacingOccurrences(of: "\r\n", with: "\n")
+                .replacingOccurrences(of: "\r", with: "\n")
+            textView.insertText(normalized, replacementRange: affectedCharRange)
+            return false
+        }
         // Composed text, and the character that ends a composition, replace
         // the marked text: pairing or wrapping it would double it.
         guard let replacementString, !self.textView.isEditingAtCarets, !self.textView.isReplacingAsCommand,
