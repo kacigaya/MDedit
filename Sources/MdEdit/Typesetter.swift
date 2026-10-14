@@ -57,6 +57,10 @@ final class Typesetter: NSObject {
     }
 
     private var entries: [Request: Entry] = [:]
+    /// Finished entries, oldest first, so the oldest go once there are too
+    /// many: every source a block ever had while being typed stays otherwise.
+    private var finished: [Request] = []
+    private static let finishedLimit = 1000
     private var queue: [Request] = []
     private var isWorking = false
     private var webView: WKWebView?
@@ -80,6 +84,18 @@ final class Typesetter: NSObject {
         }
     }
 
+    /// Drops a request nothing waits for any more, if it has not started.
+    /// A block being edited asks for each new source as it is typed, and
+    /// typesetting every one in turn left the preview far behind.
+    func cancel(_ request: Request) {
+        guard case .pending? = entries[request], let index = queue.firstIndex(of: request) else { return }
+        queue.remove(at: index)
+        entries[request] = nil
+    }
+
+    /// Whether a request is waiting its turn.
+    func isQueued(_ request: Request) -> Bool { queue.contains(request) }
+
     /// Why a source could not be typeset — a TeX or Mermaid syntax error.
     func error(for request: Request) -> String? {
         if case let .failed(message)? = entries[request] { return message }
@@ -100,12 +116,23 @@ final class Typesetter: NSObject {
         Task {
             let entry = await self.typeset(request, in: webView)
             self.entries[request] = entry
+            self.remember(request)
             self.isWorking = false
             if case .done = entry {
                 NotificationCenter.default.post(name: Self.didRender, object: self, userInfo: ["request": request])
             }
             self.pump()
         }
+    }
+
+    private func remember(_ request: Request) {
+        finished.append(request)
+        guard finished.count > Self.finishedLimit else { return }
+        // A text storage keeps the images it shows; one asking again later
+        // has it typeset again.
+        let dropped = finished.prefix(finished.count - Self.finishedLimit * 3 / 4)
+        for old in dropped where !queue.contains(old) { entries[old] = nil }
+        finished.removeFirst(dropped.count)
     }
 
     private func typeset(_ request: Request, in webView: WKWebView) async -> Entry {

@@ -39,4 +39,18 @@ struct LinkPolicyTests {
         #expect(!UpdateChecker.isReleasePage(URL(string: "https://evil.example/MdEdit.dmg")!))
         #expect(!UpdateChecker.isReleasePage(URL(string: "file:///Applications/Calculator.app")!))
     }
+
+    /// Only the link's own name was looked at, so a symlink called `notes`
+    /// pointing at a `.terminal` file opened Terminal.
+    @Test("A symlink is judged by the file it points to")
+    func symlinkToRunnable() throws {
+        let target = try temporaryFile("run.terminal")
+        let link = target.deletingLastPathComponent().appendingPathComponent("notes")
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: target)
+        #expect(LinkPolicy.action(forFile: link) == .reveal)
+        let document = try temporaryFile("doc.md")
+        let documentLink = document.deletingLastPathComponent().appendingPathComponent("doc-link.md")
+        try FileManager.default.createSymbolicLink(at: documentLink, withDestinationURL: document)
+        #expect(LinkPolicy.action(forFile: documentLink) == .open)
+    }
 }

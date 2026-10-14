@@ -21,11 +21,15 @@ struct FileFormat: Equatable {
         } else if let utf8 = String(data: data, encoding: .utf8) {
             raw = utf8
         } else {
+            // Only an encoding that reads every byte: a lossy guess shows
+            // stand-ins for what it could not read, and the next save writes
+            // them over the original bytes for good.
             var probed: NSString?
+            var lossy: ObjCBool = false
             let detected = NSString.stringEncoding(
-                for: data, encodingOptions: nil, convertedString: &probed, usedLossyConversion: nil
+                for: data, encodingOptions: [.allowLossyKey: false], convertedString: &probed, usedLossyConversion: &lossy
             )
-            guard let probed, detected != 0 else {
+            guard let probed, detected != 0, !lossy.boolValue else {
                 throw CocoaError(.fileReadInapplicableStringEncoding)
             }
             raw = probed as String

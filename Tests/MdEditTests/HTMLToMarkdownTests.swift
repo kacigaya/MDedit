@@ -55,4 +55,16 @@ struct HTMLToMarkdownTests {
         #expect(md("<ol start=\"-3\"><li>a</li></ol>") == "0. a")
         #expect(md("<ol start=\"4\"><li>a</li></ol>") == "4. a")
     }
+
+    /// Parsing nested markup recurses once per level: a page nested deep
+    /// enough overflowed the stack and took the app down.
+    @Test("Markup nested past any real page's depth pastes as text instead")
+    func deepNesting() {
+        let wrap = { (depth: Int) in String(repeating: "<span>", count: depth) + "<p>deep</p>" + String(repeating: "</span>", count: depth) + "<p><b>bold</b></p>" }
+        #expect(md(wrap(500))?.contains("deep") == true)
+        #expect(md(wrap(100_000)) == nil)
+        // Tags that never close do not count.
+        #expect(HTMLToMarkdown.nestingDepth(of: String(repeating: "a<br>b<img src=x><hr/>", count: 5000)) == 0)
+        #expect(HTMLToMarkdown.nestingDepth(of: "<ul><li><b>x</b></li><li>y</li></ul>") == 3)
+    }
 }

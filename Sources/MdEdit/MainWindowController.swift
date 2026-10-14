@@ -1234,8 +1234,19 @@ final class MainWindowController: NSWindowController {
     private var versionBrowser: VersionBrowserController?
 
     @objc func browseVersions(_ sender: Any?) {
-        guard let window, let document = activeDocument, let url = document.url else { return NSSound.beep() }
-        let browser = VersionBrowserController(versions: document.history.allVersions(for: url), title: document.displayName)
+        guard window != nil, versionBrowser == nil, let document = activeDocument, let url = document.url else { return NSSound.beep() }
+        // Asking macOS for its versions can take a while, for iCloud files most.
+        let history = document.history
+        Task { [weak self, weak document] in
+            let versions = await Task.detached { history.allVersions(for: url) }.value
+            guard let self, let document, versionBrowser == nil else { return }
+            showVersions(versions, of: document)
+        }
+    }
+
+    private func showVersions(_ versions: [VersionHistory.Version], of document: Document) {
+        guard let window else { return }
+        let browser = VersionBrowserController(versions: versions, title: document.displayName)
         browser.onFinish = { [weak self, weak document] text in
             self?.versionBrowser = nil
             guard let self, let document, let text else { return }

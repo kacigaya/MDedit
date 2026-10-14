@@ -45,6 +45,16 @@ struct FileFormatTests {
         let format = FileFormat(encoding: .ascii)
         #expect(throws: (any Error).self) { try format.encode("naïve") }
     }
+
+    /// A stray byte in UTF-8 text was read with a lossy guess: stand-ins for
+    /// what it could not read, written over the original bytes on save.
+    @Test("A file that is not valid UTF-8 is read in an encoding that keeps every byte")
+    func strayByteRoundTrip() throws {
+        let data = Data("café ".utf8) + Data([0xFF, 0x81]) + Data(" fin\n".utf8)
+        let (text, format) = try FileFormat.decode(data)
+        #expect(format.encoding != .utf8)
+        #expect(try format.encode(text) == data)
+    }
 }
 
 @Suite("RecoveryStore")

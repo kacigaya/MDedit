@@ -48,6 +48,11 @@ final class ImageCache {
         }
     }
 
+    /// Whether an image could not be read, so nothing is waiting for it.
+    func hasFailed(_ url: URL) -> Bool {
+        if case .failed? = entries[url] { true } else { false }
+    }
+
     /// Whether any image is still on its way, so printing can wait for it.
     var isLoading: Bool {
         entries.values.contains { if case .loading = $0 { true } else { false } }

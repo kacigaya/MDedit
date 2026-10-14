@@ -264,4 +264,40 @@ struct TypingTests {
         #expect(storage.attribute(.mdConcealed, at: 15, effectiveRange: nil) == nil)
         #expect(storage.attribute(.mdMarker, at: 8, effectiveRange: nil) == nil)
     }
+
+    /// A line whose image could not be read waited for it forever, and was
+    /// restyled each time any other image or formula arrived.
+    @Test("A line whose image failed to load stops waiting for it")
+    func failedImageStopsWaiting() async throws {
+        let storage = MarkdownTextStorage(theme: .light)
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("MdEditMissing-\(UUID().uuidString)")
+        storage.baseURL = folder.appendingPathComponent("doc.md")
+        storage.replaceCharacters(in: NSRange(location: 0, length: 0), with: "![alt](missing.png)\n")
+        let url = folder.appendingPathComponent("missing.png")
+        for _ in 0..<100 where !ImageCache.shared.hasFailed(url) {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        #expect(ImageCache.shared.hasFailed(url))
+        // Another image arriving restyles the lines still waiting.
+        NotificationCenter.default.post(name: ImageCache.didLoad, object: url)
+        for _ in 0..<50 where storage.attribute(.mdAwaiting, at: 0, effectiveRange: nil) != nil {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        #expect(storage.attribute(.mdAwaiting, at: 0, effectiveRange: nil) == nil)
+    }
+
+    /// Each keystroke in a formula block queued its new source behind every
+    /// earlier one, so the preview fell further behind the typing.
+    @Test("Editing a formula block withdraws the source it replaces")
+    func editedBlockWithdrawsOldSource() {
+        let storage = MarkdownTextStorage(theme: .light)
+        storage.replaceCharacters(in: NSRange(location: 0, length: 0), with: "$$\na + b\n$$\n")
+        let sources = { storage.requestedTypesetting.filter { $0.kind == .displayMath }.map(\.source) }
+        #expect(sources() == ["a + b"])
+        storage.replaceCharacters(in: NSRange(location: 8, length: 0), with: " + c")
+        #expect(sources() == ["a + b + c"])
+        let old = Typesetter.Request(kind: .displayMath, source: "a + b", fontSize: storage.theme.bodyFontSize,
+                                     color: storage.theme.text.cssString, dark: storage.theme.isDark, width: 0)
+        #expect(!Typesetter.shared.isQueued(old))
+    }
 }

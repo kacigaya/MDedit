@@ -15,6 +15,9 @@ enum HTMLToMarkdown {
 
     /// Markdown for the HTML, or nil when it has no formatting worth keeping.
     static func convert(_ html: String) -> String? {
+        // Parsing and converting both recurse once per level: markup nested
+        // past any real page's depth overflowed the stack. It pastes as text.
+        guard nestingDepth(of: html) <= maxNesting else { return nil }
         guard let document = try? XMLDocument(xmlString: html, options: [.documentTidyHTML]),
               let root = document.rootElement()
         else { return nil }
@@ -23,6 +26,41 @@ enum HTMLToMarkdown {
         let markdown = Converter().blocks(of: body).joined(separator: "\n\n")
             .trimmingCharacters(in: .whitespacesAndNewlines)
         return markdown.isEmpty ? nil : markdown
+    }
+
+    static let maxNesting = 1000
+
+    private static let voidTags: Set<String> = [
+        "area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source", "track", "wbr",
+    ]
+
+    /// How deeply the tags nest, roughly: opening tags less closing ones,
+    /// leaving out those that never close.
+    static func nestingDepth(of html: String) -> Int {
+        let bytes = Array(html.utf8)
+        var depth = 0, deepest = 0, index = 0
+        while index < bytes.count {
+            defer { index += 1 }
+            guard bytes[index] == UInt8(ascii: "<"), index + 1 < bytes.count else { continue }
+            let next = bytes[index + 1]
+            if next == UInt8(ascii: "/") {
+                depth = max(0, depth - 1)
+                continue
+            }
+            guard (UInt8(ascii: "a")...UInt8(ascii: "z")).contains(next | 0x20) else { continue }
+            var end = index + 1
+            while end < bytes.count, (UInt8(ascii: "a")...UInt8(ascii: "z")).contains(bytes[end] | 0x20) || (UInt8(ascii: "0")...UInt8(ascii: "9")).contains(bytes[end]) {
+                end += 1
+            }
+            let name = String(decoding: bytes[(index + 1)..<end], as: UTF8.self).lowercased()
+            guard !voidTags.contains(name) else { continue }
+            var close = end
+            while close < bytes.count, bytes[close] != UInt8(ascii: ">") { close += 1 }
+            if close > 0, close < bytes.count, bytes[close - 1] == UInt8(ascii: "/") { continue }
+            depth += 1
+            deepest = max(deepest, depth)
+        }
+        return deepest
     }
 
     private static func containsMeaningfulTag(_ element: XMLElement) -> Bool {

@@ -29,8 +29,13 @@ enum LinkPolicy {
         "inetloc", "webloc", "fileloc", "url", "terminalsettings",
     ]
 
-    static func action(forFile url: URL) -> Action {
-        if runnableExtensions.contains(url.pathExtension.lowercased()) { return .reveal }
+    static func action(forFile link: URL) -> Action {
+        // Judged by what opening it reaches: a harmless name can be a
+        // symlink to something that runs.
+        let url = link.resolvingSymlinksInPath()
+        if runnableExtensions.contains(link.pathExtension.lowercased()) || runnableExtensions.contains(url.pathExtension.lowercased()) {
+            return .reveal
+        }
         let values = try? url.resourceValues(forKeys: [.contentTypeKey, .isDirectoryKey])
         if let type = values?.contentType,
            [.executable, .application, .applicationBundle, .script, .shellScript].contains(where: type.conforms(to:)) {

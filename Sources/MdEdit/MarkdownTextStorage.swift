@@ -251,6 +251,12 @@ final class MarkdownTextStorage: MDBackedTextStorage {
     /// The typeset block found for a run of lines, so styling a block line by
     /// line looks for it once.
     private var blockLookup: (lines: ClosedRange<Int>, block: TypesetBlock?)?
+    /// A block's request while styling it line by line: built from all its
+    /// lines, so building it for each one was quadratic in a long block.
+    private var typesetLookup: (lines: ClosedRange<Int>, request: Typesetter.Request)?
+    /// The source each block last asked for, by its first line, so an edit
+    /// withdraws the one it replaces.
+    private var blockRequests: [Int: Typesetter.Request] = [:]
     /// Inline formulas found while styling a line, drawn once its markers are set.
     private var pendingInlineMath: [(range: NSRange, rendering: Typesetter.Rendering)] = []
 
@@ -540,7 +546,11 @@ final class MarkdownTextStorage: MDBackedTextStorage {
         let upper = min(lineRange.upperBound, structure.lineCount - 1)
         guard lower <= upper else { return }
         definitionLookup = nil
-        defer { definitionLookup = nil }
+        typesetLookup = nil
+        defer {
+            definitionLookup = nil
+            typesetLookup = nil
+        }
 
         for line in lower...upper {
             guard let info = structure.info(forLine: line) else { continue }
@@ -586,7 +596,17 @@ final class MarkdownTextStorage: MDBackedTextStorage {
         var preview: InlineImage?
         var typesetError: String?
         if !sourceMode, let block = typesetBlock(containing: line) {
-            let request = typesetRequest(for: block, text: text)
+            let request: Typesetter.Request
+            if let typesetLookup, typesetLookup.lines == block.lines {
+                request = typesetLookup.request
+            } else {
+                request = typesetRequest(for: block, text: text)
+                typesetLookup = (block.lines, request)
+                if let previous = blockRequests.updateValue(request, forKey: block.lines.lowerBound), previous != request {
+                    MainActor.assumeIsolated { Typesetter.shared.cancel(previous) }
+                    requestedTypesetting.remove(previous)
+                }
+            }
             let (rendering, error) = MainActor.assumeIsolated {
                 (Typesetter.shared.rendering(for: request), Typesetter.shared.error(for: request))
             }
@@ -839,7 +859,9 @@ final class MarkdownTextStorage: MDBackedTextStorage {
         guard let source, let url = imageURL(for: source) else { return nil }
         requestedImages.insert(url)
         guard let image = MainActor.assumeIsolated({ ImageCache.shared.image(for: url) }) else {
-            lineAwaits = true
+            // One that failed will not arrive: waiting for it restyled the
+            // line on every other image and formula that did.
+            if !MainActor.assumeIsolated({ ImageCache.shared.hasFailed(url) }) { lineAwaits = true }
             return nil
         }
 
@@ -1226,7 +1248,7 @@ final class MarkdownTextStorage: MDBackedTextStorage {
                         pendingInlineMath.append((absolute, rendering))
                         continue
                     }
-                    lineAwaits = true
+                    if MainActor.assumeIsolated({ Typesetter.shared.error(for: request) }) == nil { lineAwaits = true }
                 }
                 backing.addAttributes([
                     .font: theme.mono,
