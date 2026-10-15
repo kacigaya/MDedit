@@ -74,6 +74,22 @@ struct MultiCursorTests {
         #expect(textView.selectedRanges.count == 2)
     }
 
+    @Test("Select All Occurrences stops short of too many carets")
+    func occurrenceCap() {
+        let limit = MarkdownTextView.maxOccurrences
+        let (_, editor) = makeEditor(String(repeating: "e ", count: limit + 1))
+        let textView = editor.textView
+        textView.setSelectedRange(NSRange(location: 0, length: 1))
+        editor.selectAllOccurrences()
+        #expect(textView.selectedRanges == [NSValue(range: NSRange(location: 0, length: 1))])
+        #expect(textView.additionalCarets.isEmpty)
+
+        textView.string = String(repeating: "e ", count: limit)
+        textView.setSelectedRange(NSRange(location: 0, length: 1))
+        editor.selectAllOccurrences()
+        #expect(textView.selectedRanges.count == limit)
+    }
+
     @Test("A column selection is typed over line by line")
     func columnSelection() {
         let (document, editor) = makeEditor("abc\ndef\n")
@@ -166,6 +182,66 @@ struct VersionHistoryTests {
         #expect(history.versions(for: URL(fileURLWithPath: "/Users/someone/notes/b.md")).isEmpty)
         let note = try String(contentsOf: history.directory(for: file).appendingPathComponent("path.txt"), encoding: .utf8)
         #expect(note == "/Users/someone/notes/a.md")
+    }
+
+    @Test("Pruning drops old copies and the history of files that have gone, keeping recent ones")
+    func pruneByAge() throws {
+        let scratch = FileManager.default.temporaryDirectory.appendingPathComponent("MdEditHistory-\(UUID().uuidString)")
+        let history = VersionHistory(root: scratch.appendingPathComponent("History"))
+        let folder = scratch.appendingPathComponent("notes")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let now = Date(timeIntervalSince1970: 100_000_000)
+        func daysAgo(_ days: Double) -> Date { now.addingTimeInterval(-days * 24 * 60 * 60) }
+
+        let kept = folder.appendingPathComponent("kept.md")
+        try "".write(to: kept, atomically: true, encoding: .utf8)
+        for (days, text) in [(200.0, "ancient"), (100, "old"), (50, "recent"), (1, "new")] {
+            try history.record(text, for: kept, at: daysAgo(days))
+        }
+        // Deleted a while ago, deleted just now, and on a folder that is not
+        // there (a volume not mounted), where only age decides.
+        let deleted = folder.appendingPathComponent("deleted.md")
+        let justDeleted = folder.appendingPathComponent("just-deleted.md")
+        let unmounted = URL(fileURLWithPath: "/Volumes/MdEditNotMounted-\(UUID().uuidString)/x.md")
+        try history.record("gone", for: deleted, at: daysAgo(40))
+        try history.record("gone too", for: justDeleted, at: daysAgo(1))
+        try history.record("away old", for: unmounted, at: daysAgo(120))
+        try history.record("away", for: unmounted, at: daysAgo(40))
+
+        history.prune(now: now)
+        #expect(try history.versions(for: kept).map { try String(contentsOf: $0.url, encoding: .utf8) } == ["new", "recent"])
+        #expect(!FileManager.default.fileExists(atPath: history.directory(for: deleted).path))
+        #expect(history.versions(for: justDeleted).count == 1)
+        #expect(history.versions(for: unmounted).count == 1)
+
+        // However old, the newest copy of a file still there stays.
+        history.prune(now: now.addingTimeInterval(1000 * 24 * 60 * 60))
+        #expect(history.versions(for: kept).count == 1)
+    }
+
+    @Test("Pruning keeps the history within its size, oldest copies first")
+    func pruneBySize() throws {
+        let scratch = FileManager.default.temporaryDirectory.appendingPathComponent("MdEditHistory-\(UUID().uuidString)")
+        var history = VersionHistory(root: scratch.appendingPathComponent("History"))
+        try FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: true)
+        let a = scratch.appendingPathComponent("a.md"), b = scratch.appendingPathComponent("b.md")
+        for file in [a, b] { try "".write(to: file, atomically: true, encoding: .utf8) }
+        let now = Date(timeIntervalSince1970: 100_000_000)
+        let block = String(repeating: "x", count: 1000)
+        for index in 0..<5 {
+            try history.record("a\(index)" + block, for: a, at: now.addingTimeInterval(Double(index * 2)))
+            try history.record("b\(index)" + block, for: b, at: now.addingTimeInterval(Double(index * 2 + 1)))
+        }
+        history.totalLimit = 5000
+        history.prune(now: now)
+        let left = (history.versions(for: a) + history.versions(for: b)).map(\.date).sorted()
+        #expect(left == (6..<10).map { now.addingTimeInterval(Double($0)) })
+
+        // The newest of each stays even when the two alone are over.
+        history.totalLimit = 10
+        history.prune(now: now)
+        #expect(history.versions(for: a).count == 1)
+        #expect(history.versions(for: b).count == 1)
     }
 
     @Test("Files in the temporary folder keep no history")

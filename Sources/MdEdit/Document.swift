@@ -69,6 +69,22 @@ struct FileFormat: Equatable {
     }
 }
 
+/// What a file's modification date and size were, to tell whether anyone
+/// has written to it since.
+struct FileStamp: Equatable {
+    var modified: Date
+    var size: Int
+
+    init?(of url: URL) {
+        guard let attributes = try? FileManager.default.attributesOfItem(atPath: url.path),
+              let modified = attributes[.modificationDate] as? Date,
+              let size = (attributes[.size] as? NSNumber)?.intValue
+        else { return nil }
+        self.modified = modified
+        self.size = size
+    }
+}
+
 /// One open markdown file.
 ///
 /// Deliberately not an `NSDocument`: tabs live inside a single window and are
@@ -102,8 +118,10 @@ final class Document {
     /// Called when the file changes underneath us.
     var onExternalChange: (() -> Void)?
     private var watcher: FileWatcher?
-    /// Set while we write, so our own save does not look like someone else's.
-    private var isSavingSelf = false
+    /// The file as our last save left it, so the watcher's news of that
+    /// save is not taken for someone else's: a change that leaves the file
+    /// otherwise, however soon after, is theirs.
+    private var lastWritten: FileStamp?
 
     init(id: UUID = UUID(), url: URL? = nil, text: String = "", theme: Theme) {
         self.id = id
@@ -123,11 +141,12 @@ final class Document {
         watcher = nil
         guard let url else { return }
         watcher = FileWatcher(url: url) { [weak self] in
-            guard let self, !isSavingSelf else { return }
+            guard let self else { return }
             // A writer sends several events for one save; answer the last.
             pendingExternalChange?.cancel()
             let change = DispatchWorkItem { [weak self] in
-                guard let self, !isSavingSelf else { return }
+                guard let self, let url = self.url else { return }
+                if let lastWritten, FileStamp(of: url.resolvingSymlinksInPath()) == lastWritten { return }
                 onExternalChange?()
             }
             pendingExternalChange = change
@@ -226,17 +245,16 @@ final class Document {
         guard let destination = target ?? url else { return }
         let contents = storage.string
         let data = try format.encode(contents)
-        isSavingSelf = true
-        defer {
-            // Atomic writes land as a rename, which the watcher sees moments later.
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
-                self?.isSavingSelf = false
-            }
-        }
         // Through a symlink to the file it names: an atomic write renames a
         // new file into place, which would replace the link itself and leave
         // the real file as it was.
-        try data.write(to: destination.resolvingSymlinksInPath(), options: .atomic)
+        let file = destination.resolvingSymlinksInPath()
+        if Self.linkCount(of: file) > 1 {
+            try Self.writeInPlace(data, to: file)
+        } else {
+            try data.write(to: file, options: .atomic)
+        }
+        lastWritten = FileStamp(of: file)
         let needsWatcher = url != destination || isMissingOnDisk
         if url != destination { FileAccess.remember(destination) }
         url = destination
@@ -249,6 +267,30 @@ final class Document {
         if needsWatcher { beginWatching() }
         NSDocumentController.shared.noteNewRecentDocumentURL(destination)
         recordVersion(contents)
+    }
+
+    private static func linkCount(of file: URL) -> Int {
+        ((try? FileManager.default.attributesOfItem(atPath: file.path))?[.referenceCount] as? NSNumber)?.intValue ?? 0
+    }
+
+    /// Writes over a file's own bytes. An atomic write renames a new file
+    /// into place, which would split a file with other hard links from them:
+    /// they would keep the old text. Should the write fail partway, the old
+    /// bytes are put back.
+    private static func writeInPlace(_ data: Data, to file: URL) throws {
+        let original = try Data(contentsOf: file)
+        let handle = try FileHandle(forWritingTo: file)
+        defer { try? handle.close() }
+        do {
+            try handle.write(contentsOf: data)
+            try handle.truncate(atOffset: UInt64(data.count))
+            try handle.synchronize()
+        } catch {
+            try? handle.seek(toOffset: 0)
+            try? handle.write(contentsOf: original)
+            try? handle.truncate(atOffset: UInt64(original.count))
+            throw error
+        }
     }
 
     /// What the last recovery snapshot was written from, so an unchanged

@@ -9,6 +9,7 @@ import Foundation
 /// file renamed or moved between launches.
 enum FileAccess {
     private static let defaultsKey = "fileBookmarks"
+    private static let pinnedKey = "pinnedFileBookmarks"
     /// Enough for every tab and folder of a session, with room to spare.
     static let limit = 300
 
@@ -26,9 +27,24 @@ enum FileAccess {
         var bookmarks = load(from: defaults)
         bookmarks.removeAll { $0.path == url.standardizedFileURL.path }
         bookmarks.append(Entry(path: url.standardizedFileURL.path, data: data))
-        // The oldest go first.
-        if bookmarks.count > limit { bookmarks.removeFirst(bookmarks.count - limit) }
+        // The oldest go first, except those the session still needs: losing
+        // the workspace folder's would lose the folder, sandboxed.
+        let pinned = Set(defaults.stringArray(forKey: pinnedKey) ?? [])
+        var excess = bookmarks.count - limit
+        if excess > 0 {
+            bookmarks.removeAll { entry in
+                guard excess > 0, !pinned.contains(entry.path) else { return false }
+                excess -= 1
+                return true
+            }
+        }
         save(bookmarks, to: defaults)
+    }
+
+    /// Keeps the bookmarks of these files and folders, the open session's,
+    /// however many others are remembered after them.
+    static func pin(_ urls: [URL], in defaults: UserDefaults = .standard) {
+        defaults.set(urls.map(\.standardizedFileURL.path), forKey: pinnedKey)
     }
 
     /// Where a remembered file is now, with access to it started. A file

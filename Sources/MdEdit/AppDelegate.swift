@@ -33,6 +33,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             showWelcome(nil)
         }
         UpdateChecker.checkInBackgroundIfDue()
+        VersionHistory.standard.pruneLater()
         try? FileManager.default.createDirectory(at: ThemeCatalog.customDirectory, withIntermediateDirectories: true)
         themeWatcher = DirectoryWatcher(url: ThemeCatalog.customDirectory) { _ in Settings.notifyChanged() }
     }
@@ -156,10 +157,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             (index < controllers.count ? controllers[index] : makeWindow(restoringFrame: true), window)
         }
         Task {
-            await withTaskGroup { group in
+            let unreopened = await withTaskGroup { group in
                 for (controller, window) in windows {
-                    group.addTask { await controller.restore(window) }
+                    group.addTask { (controller, await controller.restore(window)) }
                 }
+                var unreopened: [(MainWindowController, [URL])] = []
+                for await result in group { unreopened.append(result) }
+                return unreopened
             }
 
             var leftovers: [RecoveryStore.Snapshot] = []
@@ -171,6 +175,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 }
             }
             if !leftovers.isEmpty { await (controllers.first ?? makeWindow()).restore(snapshots: leftovers) }
+            for (controller, urls) in unreopened { controller.reportUnreopened(urls) }
 
             hasRestored = true
             // Snapshots were keyed by the old documents' ids; rewrite them under the new ones.
@@ -182,7 +187,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func saveSession() {
         guard hasRestored else { return }
-        Session(windows: controllers.map { $0.windowSession() }).save()
+        let session = Session(windows: controllers.map { $0.windowSession() })
+        session.save()
+        FileAccess.pin(session.windows.flatMap { $0.tabs.map(\.url) + [$0.workspace].compactMap { $0 } })
     }
 
     // MARK: - Menu actions

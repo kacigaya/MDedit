@@ -161,7 +161,13 @@ extension MarkdownTextView {
         showFindIndicator(for: found)
     }
 
+    /// The most carets Select All Occurrences makes: past a few thousand,
+    /// every keystroke edits and redraws them all, and the app stalls.
+    static let maxOccurrences = 10_000
+
     /// Selects every match of the selection, or of the word at the caret.
+    /// Beeps, leaving the selection alone, when there are too many: a part
+    /// of them would edit some matches and leave the rest unseen.
     func selectAllOccurrences(wordRange: (Int) -> NSRange) {
         let text = string as NSString
         var needleRange = selectedRange()
@@ -174,6 +180,7 @@ extension MarkdownTextView {
             let found = text.range(of: needle, options: [], range: search)
             guard found.location != NSNotFound else { break }
             matches.append(found)
+            if matches.count > Self.maxOccurrences { return NSSound.beep() }
             search = NSRange(location: NSMaxRange(found), length: text.length - NSMaxRange(found))
         }
         guard !matches.isEmpty else { return }

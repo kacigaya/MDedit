@@ -287,6 +287,29 @@ struct FileOnDiskTests {
         #expect(try String(contentsOf: target, encoding: .utf8) == "new\n")
     }
 
+    /// An atomic save renamed a new file over the path, so the file's other
+    /// hard links kept the old text.
+    @Test("Saving a file with other hard links writes it in place, so they all change")
+    func saveKeepsHardLinks() async throws {
+        let folder = try folder()
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let file = folder.appendingPathComponent("note.md")
+        let other = folder.appendingPathComponent("other.md")
+        try "a longer old text\n".write(to: file, atomically: true, encoding: .utf8)
+        try FileManager.default.linkItem(at: file, to: other)
+        func inode(_ url: URL) throws -> Int {
+            try #require(FileManager.default.attributesOfItem(atPath: url.path)[.systemFileNumber] as? Int)
+        }
+        let before = try inode(file)
+
+        let document = try await Document.open(contentsOf: file, theme: .light)
+        document.storage.replaceCharacters(in: NSRange(location: 0, length: document.storage.length), with: "new\n")
+        try document.save()
+        #expect(try String(contentsOf: other, encoding: .utf8) == "new\n")
+        #expect(try inode(file) == before)
+        #expect(try inode(other) == before)
+    }
+
     /// The watch looked for a replaced file once, a tenth of a second on;
     /// a file back any later went unwatched, and saving overwrote whatever
     /// was written to it after.
@@ -311,5 +334,31 @@ struct FileOnDiskTests {
         }
         #expect(box.changes > before)
         withExtendedLifetime(watcher) {}
+    }
+
+    /// Every watcher event for 0.3 s after a save was taken for the save's
+    /// own, so another app's write in that moment went unseen.
+    @Test("Our own save is not news; another write straight after it is")
+    func writeJustAfterSave() async throws {
+        let folder = try folder()
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let url = folder.appendingPathComponent("busy.md")
+        try "one\n".write(to: url, atomically: false, encoding: .utf8)
+        let document = try await Document.open(contentsOf: url, theme: .light)
+        var changes = 0
+        document.onExternalChange = { changes += 1 }
+
+        document.storage.replaceCharacters(in: NSRange(location: 0, length: 3), with: "two")
+        try document.save()
+        try await Task.sleep(for: .milliseconds(600))
+        #expect(changes == 0)
+
+        document.storage.replaceCharacters(in: NSRange(location: 0, length: 3), with: "six")
+        try document.save()
+        try "someone else's\n".write(to: url, atomically: true, encoding: .utf8)
+        for _ in 0..<30 where changes == 0 {
+            try await Task.sleep(for: .milliseconds(100))
+        }
+        #expect(changes == 1)
     }
 }

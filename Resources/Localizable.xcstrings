@@ -16,6 +16,9 @@
     "%@, edited" : {
 
     },
+    "%lld files from your last session couldn’t be reopened." : {
+
+    },
     "%lld min" : {
 
     },
@@ -283,6 +286,12 @@
 
     },
     "Format:" : {
+
+    },
+    "GitHub answered with an error (%lld)." : {
+
+    },
+    "GitHub is limiting how often it can be asked. Try again in an hour or so." : {
 
     },
     "Go to Tab" : {
@@ -680,6 +689,9 @@
     "Theme:" : {
 
     },
+    "They may have been moved, renamed or deleted, or MdEdit may no longer be allowed to read them." : {
+
+    },
     "Title and page numbers on each page" : {
 
     },
@@ -817,6 +829,9 @@
     "^Superscript^ and ~subscript~" : {
 
     },
+    "and %lld more" : {
+
+    },
     "checked" : {
 
     },
@@ -846,6 +861,9 @@
       }
     },
     "“%@” changed on disk." : {
+
+    },
+    "“%@” couldn’t be reopened." : {
 
     }
   },

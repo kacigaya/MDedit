@@ -7,7 +7,7 @@ import CryptoKit
 /// Each file gets a folder in `~/Library/Application Support/MdEdit/History`
 /// named from a hash of its path, holding one `.md` per version and a note of
 /// the path. Saving the same text twice keeps one copy; the oldest go first
-/// past `limit`.
+/// past `limit`, and `prune` keeps the whole history to a size and an age.
 struct VersionHistory {
     struct Version: Equatable {
         var date: Date
@@ -19,6 +19,13 @@ struct VersionHistory {
 
     let root: URL
     var limit = 100
+    /// Past this many bytes in all, the oldest copies go first.
+    var totalLimit = 200 * 1024 * 1024
+    /// Copies older than this go.
+    var maxAge: TimeInterval = 90 * 24 * 60 * 60
+    /// The history of a file deleted or renamed goes once its newest copy
+    /// is this old.
+    var orphanAge: TimeInterval = 30 * 24 * 60 * 60
 
     static let standard = VersionHistory(
         root: FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
@@ -70,9 +77,60 @@ struct VersionHistory {
         }
     }
 
+    /// Prunes in the background.
+    func pruneLater(now: Date = Date()) {
+        Self.queue.async { prune(now: now) }
+    }
+
+    /// Keeps the history within `maxAge` and `totalLimit`, and drops that of
+    /// files that have gone. The newest copy of every file still there is
+    /// always kept, however old or large.
+    func prune(now: Date = Date()) {
+        let manager = FileManager.default
+        let folders = (try? manager.contentsOfDirectory(at: root, includingPropertiesForKeys: [.isDirectoryKey])) ?? []
+        var removable: [(version: Version, size: Int)] = []
+        var total = 0
+        for folder in folders where (try? folder.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true {
+            let versions = versions(in: folder)
+            let original = (try? String(contentsOf: folder.appendingPathComponent("path.txt"), encoding: .utf8))
+                .map { URL(fileURLWithPath: $0) }
+            if Self.isGone(original), versions.first.map({ now.timeIntervalSince($0.date) > orphanAge }) ?? true {
+                try? manager.removeItem(at: folder)
+                continue
+            }
+            for (index, version) in versions.enumerated() {
+                let size = (try? version.url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
+                if index > 0, now.timeIntervalSince(version.date) > maxAge {
+                    try? manager.removeItem(at: version.url)
+                    continue
+                }
+                total += size
+                if index > 0 { removable.append((version, size)) }
+            }
+        }
+        for (version, size) in removable.sorted(by: { $0.version.date < $1.version.date }) where total > totalLimit {
+            try? manager.removeItem(at: version.url)
+            total -= size
+        }
+    }
+
+    /// A file deleted or renamed: its folder is there and it is not. When
+    /// the folder is missing too, the volume may just not be mounted, and
+    /// sandboxed the app cannot look; age alone then decides.
+    private static func isGone(_ file: URL?) -> Bool {
+        guard let file else { return true }
+        guard !FileAccess.isSandboxed else { return false }
+        let manager = FileManager.default
+        return !manager.fileExists(atPath: file.path) && manager.fileExists(atPath: file.deletingLastPathComponent().path)
+    }
+
     /// MdEdit's copies, newest first.
     func versions(for file: URL) -> [Version] {
-        let files = (try? FileManager.default.contentsOfDirectory(at: directory(for: file), includingPropertiesForKeys: nil)) ?? []
+        versions(in: directory(for: file))
+    }
+
+    private func versions(in folder: URL) -> [Version] {
+        let files = (try? FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil)) ?? []
         return files
             .filter { $0.pathExtension == "md" }
             .compactMap { url in

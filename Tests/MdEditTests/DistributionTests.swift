@@ -49,6 +49,69 @@ struct DistributionTests {
         #expect(FileAccess.resolve(files[0], in: defaults) == files[0])
     }
 
+    @Test("The session's files and folder keep their bookmarks however many come after")
+    func pinnedBookmarks() throws {
+        let defaults = scratchDefaults()
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("MdEditBookmarks-\(UUID().uuidString)")
+        let workspace = folder.appendingPathComponent("workspace", isDirectory: true)
+        try FileManager.default.createDirectory(at: workspace, withIntermediateDirectories: true)
+        let tab = workspace.appendingPathComponent("open.md")
+        try "".write(to: tab, atomically: true, encoding: .utf8)
+        FileAccess.remember(workspace, in: defaults)
+        FileAccess.remember(tab, in: defaults)
+        FileAccess.pin([workspace, tab], in: defaults)
+        var files: [URL] = []
+        for index in 0...FileAccess.limit {
+            let file = folder.appendingPathComponent("\(index).md")
+            try "".write(to: file, atomically: true, encoding: .utf8)
+            FileAccess.remember(file, in: defaults)
+            files.append(file)
+        }
+        // Both still followed when moved; the oldest unpinned file is not.
+        let movedWorkspace = folder.appendingPathComponent("moved", isDirectory: true)
+        try FileManager.default.moveItem(at: workspace, to: movedWorkspace)
+        #expect(FileAccess.resolve(workspace, in: defaults).standardizedFileURL.path == movedWorkspace.standardizedFileURL.path)
+        #expect(FileAccess.resolve(tab, in: defaults).standardizedFileURL.path == movedWorkspace.appendingPathComponent("open.md").standardizedFileURL.path)
+        try FileManager.default.moveItem(at: files[0], to: folder.appendingPathComponent("gone.md"))
+        #expect(FileAccess.resolve(files[0], in: defaults) == files[0])
+    }
+
+    /// The day was stamped before asking, so a check made offline put off
+    /// the next for a day; and a rate limit read as a garbled release.
+    @Test("A background check counts only once it gets an answer, and an error status is not read as a release")
+    func updateCheckFailures() async throws {
+        let defaults = scratchDefaults()
+        var settings = Settings()
+        settings.defaults = defaults
+        settings.checkForUpdates = true
+        let original = UpdateChecker.fetch
+        defer { UpdateChecker.fetch = original }
+        let api = UpdateChecker.latestRelease
+        func respond(_ status: Int, _ body: String) {
+            UpdateChecker.fetch = { _ in
+                (Data(body.utf8), HTTPURLResponse(url: api, statusCode: status, httpVersion: nil, headerFields: nil)!)
+            }
+        }
+
+        respond(403, #"{"message": "API rate limit exceeded"}"#)
+        await UpdateChecker.checkInBackgroundIfDue(settings: settings)?.value
+        #expect(defaults.object(forKey: "lastUpdateCheck") == nil)
+        #expect(throws: UpdateChecker.ResponseError(status: 403)) {
+            try UpdateChecker.release(from: Data(), response: HTTPURLResponse(url: api, statusCode: 403, httpVersion: nil, headerFields: nil)!)
+        }
+
+        UpdateChecker.fetch = { _ in throw URLError(.notConnectedToInternet) }
+        await UpdateChecker.checkInBackgroundIfDue(settings: settings)?.value
+        #expect(defaults.object(forKey: "lastUpdateCheck") == nil)
+
+        // No newer release: nothing to say, and the day starts now.
+        respond(200, #"{"tag_name": "v0", "html_url": "https://github.com/msk-mdi/MDedit/releases/tag/v0"}"#)
+        let now = Date()
+        await UpdateChecker.checkInBackgroundIfDue(settings: settings, now: now)?.value
+        #expect(defaults.object(forKey: "lastUpdateCheck") as? Date == now)
+        #expect(UpdateChecker.checkInBackgroundIfDue(settings: settings, now: now.addingTimeInterval(60)) == nil)
+    }
+
     @Test("Info.plist declares the markdown type and claims it")
     func markdownType() throws {
         let data = try Data(contentsOf: root.appendingPathComponent("Resources/Info.plist"))

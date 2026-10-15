@@ -78,6 +78,11 @@ final class MainWindowController: NSWindowController {
     lazy var askToConvertToUTF8: (Document, @escaping (Bool) -> Void) -> Void = { [weak self] document, answer in
         self?.presentConvertAlert(for: document, answer: answer)
     }
+    /// Tells which of the last session's files could not be reopened; a
+    /// sheet unless a test listens instead.
+    lazy var tellAboutUnreopened: ([URL]) -> Void = { [weak self] urls in
+        self?.presentUnreopenedAlert(for: urls)
+    }
     private var pendingSnapshot: DispatchWorkItem?
     /// Set once the user has answered for every unsaved document, so closing
     /// the window and the quit that follows do not ask twice.
@@ -693,8 +698,21 @@ final class MainWindowController: NSWindowController {
             return
         }
         guard document.isDirty else { return reloadFromDisk(document) }
+        askWhetherToReload(document)
+    }
 
+    /// Documents with a "changed on disk" question still unanswered.
+    private var askingAboutExternalChange: Set<ObjectIdentifier> = []
+
+    /// Asks whether to reload over unsaved edits, once however many changes
+    /// arrive before the answer: a file rewritten again and again (a sync,
+    /// a build) would otherwise stack a sheet for each. Reload reads the
+    /// file as it is by then.
+    private func askWhetherToReload(_ document: Document) {
+        let key = ObjectIdentifier(document)
+        guard askingAboutExternalChange.insert(key).inserted else { return }
         askAboutExternalChange(document) { [weak self] reload in
+            self?.askingAboutExternalChange.remove(key)
             guard reload else { return }
             self?.reloadFromDisk(document)
         }
@@ -1083,7 +1101,9 @@ final class MainWindowController: NSWindowController {
     /// Reopens a window's files from the previous session, skipping any
     /// that have gone, and its folder and position. The files are read side
     /// by side, off the main thread, and come back in their saved order.
-    func restore(_ saved: Session.Window) async {
+    /// Returns the files that could not be read.
+    @discardableResult
+    func restore(_ saved: Session.Window) async -> [URL] {
         if let frame = saved.frame { window?.setFrame(from: frame) }
         if let root = saved.workspace, FileManager.default.fileExists(atPath: root.path) {
             setWorkspace(Workspace(root: root))
@@ -1097,6 +1117,7 @@ final class MainWindowController: NSWindowController {
         for (index, read) in zip(unopened, reads) { found[index] = read }
         var selected: Document?
         var restoredLast: Document?
+        var unreopened: [URL] = []
         for (index, tab) in saved.tabs.enumerated() {
             // Looked up after the reads: a file opened meanwhile has its tab.
             let document = document(at: tab.url)
@@ -1105,7 +1126,10 @@ final class MainWindowController: NSWindowController {
                     addDocument(opened, selecting: false)
                     return opened
                 }
-            guard let document else { continue }
+            guard let document else {
+                unreopened.append(tab.url)
+                continue
+            }
             if index == saved.selectedIndex { selected = document }
             restoredLast = document
             // Applied when the tab is first shown, or now if it already has been.
@@ -1124,6 +1148,29 @@ final class MainWindowController: NSWindowController {
             recovery.remove(id: placeholder.id)
         }
         refreshTabs()
+        return unreopened
+    }
+
+    /// Says which files from the last session did not come back, once
+    /// recovered text has had its say: a file it reopened is left out.
+    func reportUnreopened(_ urls: [URL]) {
+        let missing = urls.filter { !contains($0) }
+        guard !missing.isEmpty else { return }
+        tellAboutUnreopened(missing)
+    }
+
+    private func presentUnreopenedAlert(for urls: [URL]) {
+        guard let window else { return }
+        let shown = 10
+        var paths = urls.prefix(shown).map { ($0.path as NSString).abbreviatingWithTildeInPath }
+        if urls.count > shown { paths.append(String(localized: "and \(urls.count - shown) more")) }
+        let alert = NSAlert()
+        alert.messageText = urls.count == 1
+            ? String(localized: "“\(urls[0].lastPathComponent)” couldn’t be reopened.")
+            : String(localized: "\(urls.count) files from your last session couldn’t be reopened.")
+        alert.informativeText = String(localized: "They may have been moved, renamed or deleted, or MdEdit may no longer be allowed to read them.")
+            + "\n\n" + paths.joined(separator: "\n")
+        alert.beginSheetModal(for: window)
     }
 
     /// Lays recovered unsaved text over the files it belongs to, or into new
@@ -1168,10 +1215,7 @@ final class MainWindowController: NSWindowController {
     /// the choice is put as for any change on disk under unsaved edits.
     private func recoveredOverChangedFile(_ document: Document) {
         if let index = documents.firstIndex(where: { $0 === document }) { select(index: index) }
-        askAboutExternalChange(document) { [weak self] reload in
-            guard reload else { return }
-            self?.reloadFromDisk(document)
-        }
+        askWhetherToReload(document)
     }
 
     private func restore(_ tab: Session.Tab, in editor: EditorViewController, of document: Document) {

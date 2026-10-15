@@ -157,6 +157,22 @@ struct WindowFlowTests {
 
     /// The file's own encoding cannot hold an emoji; without a way out,
     /// every save and Save As failed and the text could never be saved.
+    /// Each change to a file under unsaved edits put up another sheet.
+    @Test("Changes on disk while the question is up ask it once")
+    func externalChangesCoalesce() async throws {
+        let controller = makeWindow()
+        let document = try await openEdited("changing.md", in: controller)
+        var answers: [(Bool) -> Void] = []
+        controller.askAboutExternalChange = { _, answer in answers.append(answer) }
+        for _ in 0..<3 { document.onExternalChange?() }
+        #expect(answers.count == 1)
+        answers[0](false)
+        #expect(document.isDirty)
+        // Answered: the next change asks again.
+        document.onExternalChange?()
+        #expect(answers.count == 2)
+    }
+
     @Test("Text a legacy encoding cannot hold is saved as UTF-8 once agreed to")
     func saveAsUTF8() async throws {
         try FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: true)
@@ -399,5 +415,30 @@ struct WindowFlowTests {
         #expect(controller.editorCount == 2)
         #expect(controller.windowSession().tabs[2].selectedLocation == 30)
         #expect(controller.windowSession().tabs[2].sourceMode == true)
+    }
+
+    /// Tabs whose files had gone were dropped without a word.
+    @Test("Files from the last session that could not be reopened are named, unless recovered text brought them back")
+    func unreopenedFiles() async throws {
+        try FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: true)
+        let present = scratch.appendingPathComponent("present.md")
+        try "here\n".write(to: present, atomically: true, encoding: .utf8)
+        let gone = scratch.appendingPathComponent("gone.md")
+        let recovered = scratch.appendingPathComponent("recovered.md")
+        let tabs = [present, gone, recovered].map {
+            Session.Tab(url: $0, selectedLocation: 0, sourceMode: nil, typewriterMode: nil, focusMode: nil)
+        }
+        let controller = makeWindow()
+        var told: [[URL]] = []
+        controller.tellAboutUnreopened = { told.append($0) }
+        let unreopened = await controller.restore(Session.Window(tabs: tabs, selectedIndex: 0))
+        #expect(unreopened == [gone, recovered])
+        #expect(controller.documents.map(\.url) == [present])
+
+        await controller.restore(snapshots: [.init(id: UUID(), url: recovered, text: "unsaved", base: nil)])
+        controller.reportUnreopened(unreopened)
+        #expect(told == [[gone]])
+        controller.reportUnreopened([recovered])
+        #expect(told.count == 1)
     }
 }
