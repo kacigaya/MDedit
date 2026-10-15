@@ -218,6 +218,7 @@ private struct Parser {
     private var textStart = 0
     private var rawHTMLMemo = RawHTMLMemo()
     private var mathMemo = MathMemo()
+    private var codeSpanMemo = CodeSpanMemo()
 
     init(characters: [UInt16], low: Int, high: Int, references: LinkReferences) {
         self.characters = characters
@@ -272,7 +273,7 @@ private struct Parser {
             }
 
         case UInt16(ascii: "`"):
-            if let code = parseCodeSpan(characters, at: cursor, limit: high) {
+            if let code = parseCodeSpan(characters, at: cursor, limit: high, memo: &codeSpanMemo) {
                 emit(code.node, end: code.end)
             } else {
                 // An unmatched run is literal, all of it: no shorter run inside may open.

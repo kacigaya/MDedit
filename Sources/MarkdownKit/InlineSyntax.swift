@@ -37,7 +37,20 @@ private func isWhitespaceOrLineEnding(_ character: UInt16) -> Bool {
 /// A run of backticks, closed by a run of exactly the same length. Nil when
 /// there is no such run, in which case the whole opening run is literal.
 func parseCodeSpan(_ characters: [UInt16], at index: Int, limit: Int) -> InlineMatch? {
+    var memo = CodeSpanMemo()
+    return parseCodeSpan(characters, at: index, limit: limit, memo: &memo)
+}
+
+/// The same, remembering in `memo` the runs a search that came up empty
+/// passed over; `memo` is only valid for the same characters and limit,
+/// with openers asked about in order.
+func parseCodeSpan(_ characters: [UInt16], at index: Int, limit: Int, memo: inout CodeSpanMemo) -> InlineMatch? {
     guard let open = delimiterRun(characters, at: index, character: UInt16(ascii: "`")), open.end <= limit else { return nil }
+    // A search from an earlier opener reached the end and saw every run
+    // from here on: none of this length after the opener means no closer.
+    // Runs of distinct lengths would otherwise each scan to the end.
+    if let from = memo.scannedFrom, open.end >= from, (memo.lastRun[open.count] ?? -1) < open.end { return nil }
+    var runs: [Int: Int] = [:]
     var cursor = open.end
     while cursor < limit {
         guard characters[cursor] == UInt16(ascii: "`") else {
@@ -56,9 +69,24 @@ func parseCodeSpan(_ characters: [UInt16], at index: Int, limit: Int) -> InlineM
                 end: closeEnd
             )
         }
+        runs[closeEnd - cursor] = cursor
         cursor = closeEnd
     }
+    // The opener ends on a character that is not a backtick, so this scan
+    // stepped onto every later opener's end and saw the same runs from there.
+    if memo.scannedFrom == nil {
+        memo.scannedFrom = open.end
+        memo.lastRun = runs
+    }
     return nil
+}
+
+/// The backtick runs a search for a closer passed over on its way to the end.
+struct CodeSpanMemo {
+    /// Where that search began.
+    fileprivate var scannedFrom: Int?
+    /// The start of the last run of each length it saw.
+    fileprivate var lastRun: [Int: Int] = [:]
 }
 
 /// A code span's text as it renders: line endings become spaces, and one

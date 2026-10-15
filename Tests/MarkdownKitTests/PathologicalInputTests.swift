@@ -34,6 +34,18 @@ struct PathologicalInputTests {
         #expect(HTMLRenderer().render(markdown: "$\\x $a\\$b$").contains("class=\"math"))
     }
 
+    /// Each backtick run with no closer of its length searched to the end
+    /// of the paragraph; runs of many distinct lengths each did.
+    @Test("Unclosed code spans of many lengths")
+    func unclosedCodeSpans() {
+        let markdown = (1...1000).map { String(repeating: "`", count: $0) + "a" }.joined()
+        let time = Self.seconds(markdown)
+        #expect(time < 1, "\(time) s")
+        // Still closed by a later run of the same length, past others.
+        #expect(HTMLRenderer().render(markdown: "`a ``b `c`` d") == "<p><code>a ``b </code>c`` d</p>\n")
+        #expect(HTMLRenderer().render(markdown: "``` a ``b` c`") == "<p>``` a ``b<code> c</code></p>\n")
+    }
+
     /// Each delimiter row under a paragraph split the whole paragraph to
     /// find its last line, even when the cell counts could not match.
     @Test("Delimiter rows that never match the line above")
