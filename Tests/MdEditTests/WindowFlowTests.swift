@@ -138,12 +138,15 @@ struct WindowFlowTests {
 
         // Unchanged since: the edits come back, nothing to ask.
         let quiet = makeWindow()
-        var asked = 0
-        quiet.askAboutExternalChange = { _, answer in asked += 1; answer(false) }
+        var quietAsked = 0
+        quiet.askAboutExternalChange = { _, answer in quietAsked += 1; answer(false) }
         await quiet.restore(snapshots: snapshots)
-        #expect(asked == 0)
+        #expect(quietAsked == 0)
         #expect(quiet.documents.contains { $0.text == "edited saved\n" })
 
+        // A count of its own: the window above still watches the file, and
+        // may ask about the write below whenever its watcher reports it.
+        var asked = 0
         try "pulled\n".write(to: document.url!, atomically: true, encoding: .utf8)
         let relaunched = makeWindow()
         relaunched.askAboutExternalChange = { _, answer in asked += 1; answer(true) }
