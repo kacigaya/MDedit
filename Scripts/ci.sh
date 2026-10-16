@@ -23,6 +23,32 @@ annotate() {
 	done
 }
 
+# The crashed thread of each crash report written since a file was, with
+# the exception and the last thread's queue.
+crash_reports() {
+	find "$HOME/Library/Logs/DiagnosticReports" /Library/Logs/DiagnosticReports -name '*.ips' -newer "$1" 2>/dev/null | while IFS= read -r report; do
+		echo "::group::Crash report $(basename "$report")"
+		python3 - "$report" <<-'PYTHON'
+			import json, sys
+			text = open(sys.argv[1]).read()
+			header, _, body = text.partition("\n")
+			report = json.loads(body)
+			images = report.get("usedImages", [])
+			print(json.loads(header).get("name"), report.get("exception"), report.get("termination", {}).get("indicator"))
+			for thread in report.get("threads", []):
+			    if not thread.get("triggered"):
+			        continue
+			    print("crashed thread:", thread.get("name") or thread.get("queue") or thread.get("id"))
+			    for frame in thread.get("frames", [])[:60]:
+			        image = images[frame["imageIndex"]].get("name", "?") if frame.get("imageIndex", -1) < len(images) else "?"
+			        where = frame.get("symbol", hex(frame.get("imageOffset", 0)))
+			        source = f' {frame["sourceFile"]}:{frame.get("sourceLine")}' if "sourceFile" in frame else ""
+			        print(f"  {image}  {where}{source}")
+		PYTHON
+		echo "::endgroup::"
+	done
+}
+
 case "${1:-}" in
 	toolchain)
 		# The newest Xcode on the runner, which is not always its default.
@@ -40,6 +66,9 @@ case "${1:-}" in
 		swift test 2>&1 | tee "$LOG"
 		status=${PIPESTATUS[0]}
 		annotate error '^[^ ].*:[0-9]+:[0-9]+: error: |recorded an issue at |Terminating app due to|Fatal error'
+		# A crash of the test process leaves no test to blame; macOS's crash
+		# report says where it was.
+		if [ "$status" -ne 0 ]; then crash_reports "$LOG"; fi
 		exit "$status"
 		;;
 	*)
