@@ -201,10 +201,10 @@ struct MarkdownTextStorageTests {
         #expect(storage.attribute(.mdConcealed, at: 1, effectiveRange: nil) != nil)
 
         storage.maxImageWidth = 40
-        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.05))
+        storage.restyleTablesChangingFit()
         #expect(storage.attribute(.mdTableRow, at: 0, effectiveRange: nil) is CGFloat)
         storage.maxImageWidth = 720
-        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.05))
+        storage.restyleTablesChangingFit()
         #expect(storage.attribute(.mdTableRow, at: 0, effectiveRange: nil) is TableGrid)
         storage.sourceMode = true
         #expect(storage.attribute(.mdTableRow, at: 0, effectiveRange: nil) as? Bool == true)

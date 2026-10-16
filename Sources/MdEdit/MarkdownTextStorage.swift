@@ -55,7 +55,7 @@ final class MarkdownTextStorage: MDBackedTextStorage {
     }
 
     /// Restyles the tables a new column width makes fit or no longer fit.
-    @objc private func restyleTablesChangingFit() {
+    @objc func restyleTablesChangingFit() {
         var lines = IndexSet()
         backing.enumerateAttribute(.mdTableRow, in: NSRange(location: 0, length: backing.length), options: .longestEffectiveRangeNotRequired) { value, range, _ in
             let changes = if let grid = value as? TableGrid {
