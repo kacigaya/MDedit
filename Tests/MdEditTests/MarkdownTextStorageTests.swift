@@ -174,4 +174,39 @@ struct MarkdownTextStorageTests {
         #expect(range == NSRange(location: 0, length: 0))
         #expect(storage.attribute(.font, at: 0, longestEffectiveRange: &range, in: NSRange(location: 0, length: 0)) == nil)
     }
+
+    @Test("A row splits into cells at unescaped pipes, without their spaces")
+    func tableRowSplit() {
+        let split = TableRowSplit(Array("| a | b\\|c |  |".utf16), from: 0)
+        #expect(split.leadingPipe)
+        #expect(split.pipes == [0, 4, 11, 14])
+        #expect(split.cells == [NSRange(location: 2, length: 1), NSRange(location: 6, length: 4), NSRange(location: 14, length: 0)])
+
+        let bare = TableRowSplit(Array("a | b".utf16), from: 0)
+        #expect(!bare.leadingPipe)
+        #expect(bare.cells == [NSRange(location: 0, length: 1), NSRange(location: 4, length: 1)])
+    }
+
+    @Test("A table is drawn as a grid of shared columns, or as source when too wide or in source mode")
+    func tableGrid() throws {
+        let storage = storage("| A | Longer header |\n| --- | --- |\n| wide cell | x |\n")
+        let header = try #require(storage.attribute(.mdTableRow, at: 0, effectiveRange: nil) as? TableGrid)
+        let row = try #require(storage.attribute(.mdTableRow, at: storage.structure.index.range(ofLine: 2).location, effectiveRange: nil) as? TableGrid)
+        #expect(header.isHeader && !header.isLast)
+        #expect(row.isLast && !row.isHeader)
+        #expect(header.edges == row.edges)
+        #expect(header.edges.count == 3)
+        // The delimiter row folds away, and the cells' padding is concealed.
+        #expect(storage.attribute(.mdConcealed, at: storage.structure.index.range(ofLine: 1).location, effectiveRange: nil) != nil)
+        #expect(storage.attribute(.mdConcealed, at: 1, effectiveRange: nil) != nil)
+
+        storage.maxImageWidth = 40
+        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.05))
+        #expect(storage.attribute(.mdTableRow, at: 0, effectiveRange: nil) is CGFloat)
+        storage.maxImageWidth = 720
+        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.05))
+        #expect(storage.attribute(.mdTableRow, at: 0, effectiveRange: nil) is TableGrid)
+        storage.sourceMode = true
+        #expect(storage.attribute(.mdTableRow, at: 0, effectiveRange: nil) as? Bool == true)
+    }
 }

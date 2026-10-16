@@ -120,7 +120,10 @@ final class MarkdownLayoutManager: NSLayoutManager {
                 rect.fill()
             }
 
-            if attributes[.mdTableRow] != nil {
+            if let grid = attributes[.mdTableRow] as? TableGrid {
+                let left = origin.x + container.lineFragmentPadding + grid.indent
+                self.drawTableRow(grid, in: NSRect(x: left, y: origin.y + fragmentRect.minY, width: grid.edges.last ?? 0, height: grid.height))
+            } else if attributes[.mdTableRow] != nil {
                 self.theme.codeBackground.withAlphaComponent(0.5).setFill()
                 rect.fill()
             }
@@ -172,6 +175,26 @@ final class MarkdownLayoutManager: NSLayoutManager {
                 self.theme.codeBackground.setFill()
                 NSBezierPath(roundedRect: chip, xRadius: 3, yRadius: 3).fill()
             }
+        }
+    }
+
+    /// A table row's cell lines, as in rendered output: each row draws the
+    /// line above it, the last also the one below; the header is shaded.
+    private func drawTableRow(_ grid: TableGrid, in row: NSRect) {
+        if grid.isHeader {
+            theme.codeBackground.setFill()
+            row.fill()
+        }
+        theme.rule.setFill()
+        NSRect(x: row.minX, y: row.minY, width: row.width, height: 1).fill()
+        if grid.isLast {
+            NSRect(x: row.minX, y: row.maxY - 1, width: row.width, height: 1).fill()
+        }
+        let edges = grid.isDelimiter ? [grid.edges.first, grid.edges.last].compactMap(\.self) : grid.edges
+        for (index, edge) in edges.enumerated() {
+            // The last edge sits inside the row, so the grid is as wide as measured.
+            let x = row.minX + edge - (index == edges.count - 1 ? 1 : 0)
+            NSRect(x: x, y: row.minY, width: 1, height: row.height).fill()
         }
     }
 

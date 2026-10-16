@@ -17,7 +17,8 @@ extension NSAttributedString.Key {
     static let mdLink = NSAttributedString.Key("mdLink")
     /// Set on a thematic break line, drawn as a rule.
     static let mdThematicBreak = NSAttributedString.Key("mdThematicBreak")
-    /// Set on table rows, for striping.
+    /// Set on table rows: a `TableGrid` when the table is drawn as a grid,
+    /// otherwise striped source — the width it needs when too wide for a grid.
     static let mdTableRow = NSAttributedString.Key("mdTableRow")
     /// The emoji a shortcode's closing colon is drawn as.
     static let mdEmoji = NSAttributedString.Key("mdEmoji")
@@ -104,5 +105,45 @@ struct InlineStyle {
         if italic { traits.insert(.italicFontMask) }
         guard !traits.isEmpty else { return base }
         return FontCache.font(base, withTraits: traits)
+    }
+}
+
+/// One row of a table drawn as a grid: where its column lines fall and how
+/// tall it is. The cells' text is laid into the columns by kerning the
+/// invisible pipes between them.
+final class TableGrid: NSObject {
+    /// Column edges, from the paragraph's indent; one more than the columns.
+    let edges: [CGFloat]
+    /// The paragraph's indent, where the grid starts.
+    let indent: CGFloat
+    let height: CGFloat
+    let isHeader: Bool
+    let isLast: Bool
+    /// The delimiter row, shown as source while the caret is on it: only the
+    /// outer lines are drawn, as its dashes do not sit in the columns.
+    let isDelimiter: Bool
+
+    init(edges: [CGFloat], indent: CGFloat, height: CGFloat, isHeader: Bool, isLast: Bool, isDelimiter: Bool) {
+        self.edges = edges
+        self.indent = indent
+        self.height = height
+        self.isHeader = isHeader
+        self.isLast = isLast
+        self.isDelimiter = isDelimiter
+    }
+
+    // Equal by value, so restyling a row the same way leaves it unchanged.
+    override func isEqual(_ object: Any?) -> Bool {
+        guard let other = object as? TableGrid else { return false }
+        return edges == other.edges && indent == other.indent && height == other.height
+            && isHeader == other.isHeader && isLast == other.isLast && isDelimiter == other.isDelimiter
+    }
+
+    override var hash: Int {
+        var hasher = Hasher()
+        hasher.combine(edges)
+        hasher.combine(height)
+        hasher.combine(isHeader)
+        return hasher.finalize()
     }
 }

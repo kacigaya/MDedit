@@ -5,6 +5,12 @@ workflow publishes the section for a version as its release notes.
 
 ## [Unreleased]
 
+### Changed
+- Tables in the editor are drawn as a grid, as in the preview: cells in the
+  body font with lines between them and a shaded header, aligned as the
+  delimiter row says. The source is unchanged and editable in place; tables
+  too wide for the column, or longer than 300 rows, show as aligned source.
+
 ## [1.1.2] - 2026-10-16
 
 ### Added

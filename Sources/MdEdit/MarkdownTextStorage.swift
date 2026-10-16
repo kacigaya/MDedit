@@ -39,13 +39,37 @@ final class MarkdownTextStorage: MDBackedTextStorage {
         didSet { if baseURL != oldValue, !requestedImages.isEmpty { restyleAll() } }
     }
 
-    /// Images are scaled down to fit the text column.
+    /// Images are scaled down to fit the text column, and tables too wide
+    /// for it show as source.
     var maxImageWidth: CGFloat = Metrics.defaultLineWidth {
         didSet {
-            if abs(maxImageWidth - oldValue) > 1, !requestedImages.isEmpty || !requestedTypesetting.isEmpty {
+            guard abs(maxImageWidth - oldValue) > 1 else { return }
+            if !requestedImages.isEmpty || !requestedTypesetting.isEmpty {
                 restyleLines(carrying: [.mdImage, .mdMath, .mdAwaiting])
             }
+            // Once the width settles: a view's first layouts pass through
+            // passing widths that would flip every table twice.
+            NSObject.cancelPreviousPerformRequests(withTarget: self, selector: #selector(restyleTablesChangingFit), object: nil)
+            perform(#selector(restyleTablesChangingFit), with: nil, afterDelay: 0)
         }
+    }
+
+    /// Restyles the tables a new column width makes fit or no longer fit.
+    @objc private func restyleTablesChangingFit() {
+        var lines = IndexSet()
+        backing.enumerateAttribute(.mdTableRow, in: NSRange(location: 0, length: backing.length), options: .longestEffectiveRangeNotRequired) { value, range, _ in
+            let changes = if let grid = value as? TableGrid {
+                grid.indent + (grid.edges.last ?? 0) > maxImageWidth
+            } else if let needed = value as? CGFloat {
+                needed <= maxImageWidth
+            } else {
+                false
+            }
+            if changes, range.length > 0 {
+                lines.insert(integersIn: line(at: range.location)...line(at: NSMaxRange(range) - 1))
+            }
+        }
+        restyle(lines: lines)
     }
 
     /// Which extended syntax to recognise; changing it reparses everything.
@@ -54,6 +78,7 @@ final class MarkdownTextStorage: MDBackedTextStorage {
             guard extensions != oldValue else { return }
             structure = BlockStructure(text: text, extensions: extensions)
             blockLookup = nil
+            tableLookup = nil
             references = .collect(from: structure, requireDefinitions: false, extensions: extensions)
             headingNumberCache = nil
             cachedHeadings = nil
@@ -258,6 +283,10 @@ final class MarkdownTextStorage: MDBackedTextStorage {
     /// The typeset block found for a run of lines, so styling a block line by
     /// line looks for it once.
     private var blockLookup: (lines: ClosedRange<Int>, block: TypesetBlock?)?
+    /// Likewise the last table found, so styling one row by row finds it once.
+    private var tableLookup: ClosedRange<Int>?
+    /// Set while restyling a table too wide for the column as aligned source.
+    private var stylingTableAsSource = false
     /// A block's request while styling it line by line: built from all its
     /// lines, so building it for each one was quadratic in a long block.
     private var typesetLookup: (lines: ClosedRange<Int>, request: Typesetter.Request)?
@@ -448,6 +477,7 @@ final class MarkdownTextStorage: MDBackedTextStorage {
             )
             let lineDelta = structure.lineCount - oldLineCount
             blockLookup = nil
+            tableLookup = nil
             if structure.touchedDefinitions {
                 let previous = references
                 references = .collect(from: structure, requireDefinitions: false, extensions: extensions)
@@ -610,6 +640,33 @@ final class MarkdownTextStorage: MDBackedTextStorage {
             style(line: line, info: info, range: lineRange, text: text)
             if lineAwaits { backing.addAttribute(.mdAwaiting, value: true, range: lineRange) }
         }
+
+        // A table's columns are as wide as their widest cell, so its rows are
+        // laid out together once each is styled. Callers widen the range to
+        // whole tables.
+        guard !sourceMode else { return }
+        var line = lower
+        while line <= upper {
+            guard let table = gridTable(containing: line) else {
+                line += 1
+                continue
+            }
+            if let needed = layOutTable(table, text: text) {
+                // Too wide for the column: aligned source scrolls no worse than prose wraps.
+                stylingTableAsSource = true
+                for row in table {
+                    guard let info = structure.info(forLine: row) else { continue }
+                    lineAwaits = false
+                    let range = structure.index.range(ofLine: row)
+                    style(line: row, info: info, range: range, text: text)
+                    if lineAwaits { backing.addAttribute(.mdAwaiting, value: true, range: range) }
+                    // The width it needs, so a wider column shows it as a grid again.
+                    backing.addAttribute(.mdTableRow, value: needed, range: range)
+                }
+                stylingTableAsSource = false
+            }
+            line = table.upperBound + 1
+        }
     }
 
     private func style(line: Int, info: LineInfo, range: NSRange, text: NSString) {
@@ -693,8 +750,24 @@ final class MarkdownTextStorage: MDBackedTextStorage {
         let isTableHeader = info.kind == .paragraph
             && isTableDelimiter(structure.info(forLine: line + 1)?.kind ?? .blank)
         let isTableLine = info.kind == .tableRow || isTableDelimiter(info.kind) || isTableHeader
+        // Out of source mode a table is drawn as a grid, in the body font.
+        let isGrid = isTableLine && !stylingTableAsSource && gridTable(containing: line) != nil
+        if isGrid, isTableDelimiter(info.kind), !revealed {
+            // The grid draws the line under the header in its place.
+            backing.setAttributes([
+                .font: theme.body,
+                .foregroundColor: theme.text,
+                .paragraphStyle: Self.hiddenStyle,
+                .mdConcealed: true,
+            ], range: range)
+            return
+        }
         let definitionRole = headingLevel == nil && !isTableHeader ? definitionRole(ofLine: line, info: info, text: text) : nil
-        let baseFont: NSFont = if isTableHeader {
+        let baseFont: NSFont = if isGrid, isTableHeader {
+            NSFontManager.shared.convert(theme.body, toHaveTrait: .boldFontMask)
+        } else if isGrid, !isTableDelimiter(info.kind) {
+            theme.body
+        } else if isTableHeader {
             NSFontManager.shared.convert(theme.mono, toHaveTrait: .boldFontMask)
         } else if isTableLine {
             theme.mono
@@ -837,14 +910,15 @@ final class MarkdownTextStorage: MDBackedTextStorage {
             applyMarker(marker, lineStart: range.location, revealed: revealed, baseFont: baseFont)
         }
 
-        if !pendingInlineMath.isEmpty, !isTableLine {
+        if !pendingInlineMath.isEmpty, !isTableLine || isGrid {
             applyInlineMath(lineRange: range)
         }
 
         // Pipes are scaffolding: drawn faintly so the cells read first.
         // Concealing markup inside a cell would pull its row's pipes out of
         // line, so in tables hidden markers keep their width and turn invisible.
-        if isTableLine, !isTableDelimiter(info.kind) {
+        // (A grid lays its cells out afterwards, with markup concealed.)
+        if isTableLine, !isGrid, !isTableDelimiter(info.kind) {
             backing.enumerateAttribute(.mdConcealed, in: range) { value, concealed, _ in
                 guard value != nil else { return }
                 backing.removeAttribute(.mdConcealed, range: concealed)
@@ -852,7 +926,7 @@ final class MarkdownTextStorage: MDBackedTextStorage {
             }
         }
 
-        if isTableLine, !isTableDelimiter(info.kind) {
+        if isTableLine, !isGrid, !isTableDelimiter(info.kind) {
             var escaped = false
             for (offset, unit) in characters.enumerated() {
                 if escaped {
@@ -1092,10 +1166,13 @@ final class MarkdownTextStorage: MDBackedTextStorage {
         return lower...range.upperBound
     }
 
+    /// Tables count as blocks here: a cell's width moves its whole column.
     private func expandedToTypesetBlocks(_ range: ClosedRange<Int>) -> ClosedRange<Int> {
         guard !sourceMode else { return range }
-        let lower = typesetBlock(containing: range.lowerBound)?.lines.lowerBound ?? range.lowerBound
-        let upper = typesetBlock(containing: range.upperBound)?.lines.upperBound ?? range.upperBound
+        let lower = typesetBlock(containing: range.lowerBound)?.lines.lowerBound
+            ?? gridTable(containing: range.lowerBound)?.lowerBound ?? range.lowerBound
+        let upper = typesetBlock(containing: range.upperBound)?.lines.upperBound
+            ?? gridTable(containing: range.upperBound)?.upperBound ?? range.upperBound
         return min(lower, range.lowerBound)...max(upper, range.upperBound)
     }
 
@@ -1230,6 +1307,167 @@ final class MarkdownTextStorage: MDBackedTextStorage {
         // The line grows from the top; what hangs below the baseline needs room after it.
         taller.paragraphSpacing += extraDescent
         backing.addAttribute(.paragraphStyle, value: taller, range: lineRange)
+    }
+
+    // MARK: - Tables
+
+    /// Longer tables show as aligned source: each keystroke in a grid lays
+    /// out the whole table again.
+    private static let maxGridTableRows = 300
+
+    /// The lines of the table holding a line, header to last row, when it is
+    /// drawn as a grid.
+    private func gridTable(containing line: Int) -> ClosedRange<Int>? {
+        guard !sourceMode, let info = structure.info(forLine: line) else { return nil }
+        if let tableLookup, tableLookup.contains(line) { return tableLookup }
+        var delimiter: Int
+        switch info.kind {
+        case .tableDelimiter:
+            delimiter = line
+        case .tableRow:
+            delimiter = line - 1
+            while structure.info(forLine: delimiter)?.kind == .tableRow {
+                delimiter -= 1
+                if line - delimiter > Self.maxGridTableRows { return nil }
+            }
+        case .paragraph:
+            delimiter = line + 1
+        default:
+            return nil
+        }
+        guard delimiter >= 1, isTableDelimiter(structure.info(forLine: delimiter)?.kind ?? .blank) else { return nil }
+        var end = delimiter
+        while structure.info(forLine: end + 1)?.kind == .tableRow {
+            end += 1
+            if end - delimiter > Self.maxGridTableRows { return nil }
+        }
+        tableLookup = (delimiter - 1)...end
+        return tableLookup
+    }
+
+    /// Lays a styled table's rows into columns. Each cell's padding is
+    /// concealed and the invisible pipe before it kerned, so the cell starts
+    /// where its column does; the layout manager draws the lines between.
+    /// When the table is too wide, changes nothing and returns the width it needs.
+    private func layOutTable(_ table: ClosedRange<Int>, text: NSString) -> CGFloat? {
+        let delimiterLine = table.lowerBound + 1
+        guard case let .tableDelimiter(alignments)? = structure.info(forLine: delimiterLine)?.kind else { return .infinity }
+        let showsDelimiter = revealedLines?.contains(delimiterLine) ?? false
+
+        struct Row {
+            var line: Int
+            var range: NSRange
+            var split: TableRowSplit
+            var widths: [CGFloat]
+        }
+        var rows: [Row] = []
+        var widths = [CGFloat](repeating: 0, count: alignments.count)
+        for line in table where line != delimiterLine || showsDelimiter {
+            guard let info = structure.info(forLine: line) else { continue }
+            let range = structure.index.range(ofLine: line)
+            let characters = structure.characters(of: text, line: line)
+            // The delimiter's dashes are concealed text, shown as written.
+            let split = line == delimiterLine
+                ? TableRowSplit(pipes: [], cells: [], leadingPipe: false)
+                : TableRowSplit(characters, from: info.contentStart)
+            let cellWidths = split.cells.map { visibleWidth(NSRange(location: range.location + $0.location, length: $0.length)) }
+            for (column, width) in cellWidths.enumerated() {
+                if column < widths.count { widths[column] = max(widths[column], width) } else { widths.append(width) }
+            }
+            rows.append(Row(line: line, range: range, split: split, widths: cellWidths))
+        }
+        guard let first = rows.first,
+              let base = backing.attribute(.paragraphStyle, at: first.range.location, effectiveRange: nil) as? NSParagraphStyle
+        else { return .infinity }
+
+        let padding = (theme.bodyFontSize * 0.75).rounded()
+        var edges: [CGFloat] = [0]
+        for width in widths { edges.append(edges[edges.count - 1] + ceil(width) + 2 * padding) }
+        let indent = base.firstLineHeadIndent
+        guard indent + edges[edges.count - 1] <= maxImageWidth else { return indent + edges[edges.count - 1] }
+
+        let verticalPadding = (theme.bodyFontSize * 0.45).rounded()
+        let height = ceil(Self.lineHeightManager.defaultLineHeight(for: theme.body) + 2 * verticalPadding)
+        for row in rows {
+            let isDelimiter = row.line == delimiterLine
+            // Where each cell starts: in its column, as the delimiter aligns it.
+            let starts = row.widths.enumerated().map { column, width in
+                let slack = ceil(widths[column]) - width
+                let offset: CGFloat = switch column < alignments.count ? alignments[column] : .none {
+                case .center: slack / 2
+                case .right: slack
+                case .none, .left: 0
+                }
+                return edges[column] + padding + offset
+            }
+
+            // Whitespace around cells goes; the pipes stay, invisible, to be kerned.
+            var outside = IndexSet(integersIn: 0..<(isDelimiter ? 0 : row.range.length))
+            for cell in row.split.cells { outside.remove(integersIn: cell.location..<NSMaxRange(cell)) }
+            for offset in outside {
+                let unit = text.character(at: row.range.location + offset)
+                if unit == 0x20 || unit == 0x09 {
+                    backing.addAttribute(.mdConcealed, value: true, range: NSRange(location: row.range.location + offset, length: 1))
+                }
+            }
+            var firstIndent: CGFloat = isDelimiter ? padding : 0
+            for (column, start) in starts.enumerated() {
+                let previousEnd = column == 0 ? 0 : starts[column - 1] + row.widths[column - 1]
+                let pipeIndex = row.split.leadingPipe ? column : column - 1
+                guard pipeIndex >= 0, pipeIndex < row.split.pipes.count else {
+                    firstIndent = start
+                    continue
+                }
+                let pipe = NSRange(location: row.range.location + row.split.pipes[pipeIndex], length: 1)
+                let font = backing.attribute(.font, at: pipe.location, effectiveRange: nil) as? NSFont ?? theme.body
+                let advance = ("|" as NSString).size(withAttributes: [.font: font]).width
+                backing.addAttribute(.kern, value: start - previousEnd - advance, range: pipe)
+            }
+            for pipe in row.split.pipes {
+                backing.addAttribute(.foregroundColor, value: NSColor.clear, range: NSRange(location: row.range.location + pipe, length: 1))
+            }
+
+            let style = (backing.attribute(.paragraphStyle, at: row.range.location, effectiveRange: nil) as? NSParagraphStyle ?? base)
+                .mutableCopy() as! NSMutableParagraphStyle
+            style.lineHeightMultiple = 1
+            style.minimumLineHeight = height
+            style.maximumLineHeight = height
+            style.paragraphSpacingBefore = 0
+            style.firstLineHeadIndent = indent + firstIndent
+            style.headIndent = indent + firstIndent
+            let grid = TableGrid(
+                edges: edges,
+                indent: indent,
+                height: height,
+                isHeader: row.line == table.lowerBound,
+                isLast: row.line == rows[rows.count - 1].line,
+                isDelimiter: isDelimiter
+            )
+            backing.addAttributes([
+                .paragraphStyle: style,
+                .mdTableRow: grid,
+                // The line's extra height goes above the text; this centres it.
+                .baselineOffset: verticalPadding,
+            ], range: row.range)
+        }
+        return nil
+    }
+
+    /// How wide a range draws: its glyphs less the concealed ones.
+    private func visibleWidth(_ range: NSRange) -> CGFloat {
+        guard range.length > 0 else { return 0 }
+        let visible = NSMutableAttributedString()
+        backing.enumerateAttributes(in: range) { attributes, run, _ in
+            guard attributes[.mdConcealed] == nil else { return }
+            if let emoji = attributes[.mdEmoji] as? String, let font = attributes[.font] as? NSFont,
+               let emojiFont = NSFont(name: "AppleColorEmoji", size: font.pointSize) {
+                // Drawn as the emoji, in the font `fixAttributes` will give it.
+                visible.append(NSAttributedString(string: emoji, attributes: [.font: emojiFont]))
+            } else {
+                visible.append(backing.attributedSubstring(from: run))
+            }
+        }
+        return visible.size().width
     }
 
     private func isTableDelimiter(_ kind: BlockKind) -> Bool {
@@ -1426,5 +1664,56 @@ final class MarkdownTextStorage: MDBackedTextStorage {
         let built = NSDictionary(dictionary: attributes)
         markerAttributes[key] = built
         addBackingAttributes(built, range: range)
+    }
+}
+
+/// A table row's unescaped pipes and its cells' text without the spaces
+/// around it, as offsets in the line.
+struct TableRowSplit: Equatable {
+    var pipes: [Int]
+    var cells: [NSRange]
+    var leadingPipe: Bool
+
+    init(pipes: [Int], cells: [NSRange], leadingPipe: Bool) {
+        self.pipes = pipes
+        self.cells = cells
+        self.leadingPipe = leadingPipe
+    }
+
+    init(_ characters: [UInt16], from start: Int) {
+        func isSpace(_ unit: UInt16) -> Bool { unit == 0x20 || unit == 0x09 }
+        var pipes: [Int] = []
+        var escaped = false
+        for offset in start..<max(start, characters.count) {
+            if escaped {
+                escaped = false
+            } else if characters[offset] == 0x5C /* backslash */ {
+                escaped = true
+            } else if characters[offset] == 0x7C /* pipe */ {
+                pipes.append(offset)
+            }
+        }
+        let firstText = characters[min(start, characters.count)...].firstIndex { !isSpace($0) }
+        let leadingPipe = firstText.map { pipes.first == $0 } ?? false
+
+        // The stretches between pipes, and before the first and after the last.
+        var bounds: [(Int, Int)] = []
+        var from = start
+        for pipe in pipes {
+            if pipe != pipes.first || !leadingPipe { bounds.append((from, pipe)) }
+            from = pipe + 1
+        }
+        let tail = (from, characters.count)
+        // Text after the last pipe is a cell; spaces alone are not.
+        if pipes.isEmpty || characters[tail.0..<tail.1].contains(where: { !isSpace($0) }) { bounds.append(tail) }
+
+        cells = bounds.map { lower, upper in
+            var lower = lower, upper = upper
+            while lower < upper, isSpace(characters[lower]) { lower += 1 }
+            while upper > lower, isSpace(characters[upper - 1]) { upper -= 1 }
+            return NSRange(location: lower, length: upper - lower)
+        }
+        self.pipes = pipes
+        self.leadingPipe = leadingPipe
     }
 }
