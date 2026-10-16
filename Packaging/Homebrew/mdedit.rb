@@ -8,8 +8,8 @@
 # without Gatekeeper's prompt.
 # For each release, set version and the DMG's sha256 (make-dmg.sh prints it).
 cask "mdedit" do
-  version "1.1.2"
-  sha256 "f5065e7cd69031a9ac01fd7ee105f167454062076e74b0e271915035b2f4a9a0"
+  version "1.1.4"
+  sha256 "73dc9a983083a28fc1a5a6f42708119e7bc4bf21f36589379c12891fe23a64a3"
 
   url "https://github.com/msk-mdi/MDedit/releases/download/v#{version}/MdEdit-#{version}.dmg"
   name "MdEdit"
