@@ -5,7 +5,7 @@ workflow publishes the section for a version as its release notes.
 
 ## [Unreleased]
 
-## [1.1.1] - 2026-10-16
+## [1.1.2] - 2026-10-16
 
 ### Added
 - Slash commands: typing `/` at the start of a line or after a space opens a
