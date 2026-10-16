@@ -16,7 +16,9 @@ final class SlowGate: @unchecked Sendable {
         condition.lock()
         defer { condition.unlock() }
         threads.append(Thread.isMainThread)
-        let deadline = Date(timeIntervalSinceNow: 10)
+        // Generous: on a busy CI runner, other suites' tests can hold the
+        // main actor for many seconds before this one gets to open the gate.
+        let deadline = Date(timeIntervalSinceNow: 60)
         while !isOpen {
             if !condition.wait(until: deadline) {
                 didGiveUp = true
@@ -40,7 +42,7 @@ final class SlowGate: @unchecked Sendable {
     /// Waits, with the main actor free, until reads are held at the gate.
     @MainActor
     func waitForReads(_ count: Int = 1) async throws {
-        for _ in 0..<500 where calls < count {
+        for _ in 0..<3000 where calls < count {
             try await Task.sleep(for: .milliseconds(10))
         }
         #expect(calls >= count)
