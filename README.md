@@ -44,6 +44,11 @@ markdown comes back. There is no split pane and no preview mode to switch to.
   (web, local files, `#heading` anchors), see images inline with their alt text
   as a caption, paste or drop images (pasted screenshots go to `assets/`), paste a
   URL over text to link it, and switch to plain Source Mode with ⌘/.
+- **Slash commands.** Type `/` at the start of a line or after a space for a
+  menu of headings, lists, quotes, code and Mermaid blocks, math, tables,
+  dividers, links, images, footnotes and a table of contents. Keep typing to
+  narrow it (`/h2`, `/todo`), ↑↓ to choose, Return or Tab to insert, Escape to
+  keep the slash as typed.
 - **Tables.** Tab and ⇧Tab move between cells and keep columns aligned, Return
   adds a row (and leaves the table on an empty one), and Format ▸ Table inserts
   tables and adds, removes or aligns rows and columns.

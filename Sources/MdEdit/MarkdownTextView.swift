@@ -10,6 +10,9 @@ final class MarkdownTextView: NSTextView {
     var documentURL: () -> URL? = { nil }
     /// Asked to open markdown files dropped onto the text.
     var onOpenFiles: (([URL]) -> Void)?
+    /// Told when the text stops taking the keyboard, or leaves its window,
+    /// as when another tab is chosen.
+    var onLoseFocus: (() -> Void)?
 
     /// Insertion points besides the selection, for typing in several places.
     var additionalCarets: [Int] = [] {
@@ -35,6 +38,17 @@ final class MarkdownTextView: NSTextView {
         isSettingMarkedText = true
         defer { isSettingMarkedText = false }
         super.setMarkedText(string, selectedRange: selectedRange, replacementRange: replacementRange)
+    }
+
+    override func resignFirstResponder() -> Bool {
+        let resigned = super.resignFirstResponder()
+        if resigned { onLoseFocus?() }
+        return resigned
+    }
+
+    override func viewWillMove(toWindow newWindow: NSWindow?) {
+        if newWindow !== window { onLoseFocus?() }
+        super.viewWillMove(toWindow: newWindow)
     }
 
     override func setSelectedRanges(_ ranges: [NSValue], affinity: NSSelectionAffinity, stillSelecting: Bool) {

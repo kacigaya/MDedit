@@ -129,7 +129,7 @@ extension EditorViewController {
 
     // MARK: - Helpers
 
-    private func looksLikeURL(_ value: String) -> Bool {
+    func looksLikeURL(_ value: String) -> Bool {
         guard !value.contains(where: \.isWhitespace), let url = URL(string: value) else { return false }
         return url.scheme != nil
     }

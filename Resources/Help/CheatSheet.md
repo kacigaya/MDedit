@@ -1,6 +1,6 @@
 # Markdown Cheat Sheet
 
-Every construct MdEdit understands, as you would type it. Put the caret on a line to see its source; ⌘/ shows the whole page as plain markdown.
+Every construct MdEdit understands, as you would type it. Put the caret on a line to see its source; ⌘/ shows the whole page as plain markdown. Type `/` at the start of a line for a menu that writes any of these for you.
 
 ## Text
 

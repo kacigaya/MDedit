@@ -5,6 +5,13 @@ workflow publishes the section for a version as its release notes.
 
 ## [Unreleased]
 
+### Added
+- Slash commands: typing `/` at the start of a line or after a space opens a
+  menu of blocks to make — headings, lists, quotes, code, Mermaid and math
+  blocks, tables, dividers, links, images, footnotes and a table of contents.
+  Typing narrows it, ↑↓ and Return choose, Escape leaves the `/` as typed, and
+  one undo brings the typed command back.
+
 ## [1.0.2] - 2026-10-14
 
 ### Fixed

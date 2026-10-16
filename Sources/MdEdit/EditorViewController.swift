@@ -17,6 +17,9 @@ final class EditorViewController: NSViewController {
     private(set) var activeLine: ActiveLineController!
     private var input: MarkdownInputHandler!
     private let codeAccessory = CodeBlockAccessory()
+    /// The commands typing `/` offers.
+    let slashMenu = SlashMenu()
+    private var scrollObserver: NSObjectProtocol?
 
     private(set) var theme: Theme = .current(for: NSApp.effectiveAppearance)
 
@@ -79,6 +82,23 @@ final class EditorViewController: NSViewController {
         codeAccessory.onChooseLanguage = { [weak self] name in self?.setCodeLanguage(name) }
         codeAccessory.onCopy = { [weak self] in self?.copyCodeBlock() }
         textView.addSubview(codeAccessory)
+
+        slashMenu.onChoose = { [weak self] command in self?.runSlashCommand(command) }
+        textView.onLoseFocus = { [weak self] in self?.slashMenu.close() }
+        // The menu follows the `/` when the text scrolls under it.
+        scrollView.contentView.postsBoundsChangedNotifications = true
+        scrollObserver = NotificationCenter.default.addObserver(
+            forName: NSView.boundsDidChangeNotification, object: scrollView.contentView, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.slashMenuDidScroll()
+            }
+        }
+    }
+
+    isolated deinit {
+        if let scrollObserver { NotificationCenter.default.removeObserver(scrollObserver) }
+        slashMenu.close()
     }
 
     @available(*, unavailable)
@@ -281,6 +301,7 @@ extension EditorViewController: NSTextViewDelegate {
     }
 
     func textView(_ textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
+        if handleSlashMenuKey(commandSelector) { return true }
         // Several carets type plainly: no list continuation or pairing.
         if self.textView.hasMultipleTargets { return false }
         return input.handleCommand(commandSelector, in: textView)
@@ -306,6 +327,9 @@ extension EditorViewController: NSTextViewDelegate {
         guard let replacementString, !self.textView.isEditingAtCarets, !self.textView.isReplacingAsCommand,
               !self.textView.hasMultipleTargets, !self.textView.isSettingMarkedText, !self.textView.hasMarkedText()
         else { return true }
+        if replacementString == "/", affectedCharRange.length == 0, canStartSlashCommand(at: affectedCharRange.location) {
+            slashMenu.pendingStart = affectedCharRange.location
+        }
         return !input.handleInsertion(of: replacementString, in: textView, range: affectedCharRange)
     }
 
@@ -314,10 +338,12 @@ extension EditorViewController: NSTextViewDelegate {
         updateSubstitutions()
         onSelectionChange?()
         updateCodeAccessory()
+        slashMenuSelectionDidChange()
     }
 
     func textDidChange(_ notification: Notification) {
         onTextChange?()
         updateCodeAccessory()
+        slashMenuTextDidChange()
     }
 }
