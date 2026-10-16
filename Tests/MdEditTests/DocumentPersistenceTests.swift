@@ -208,7 +208,6 @@ struct RevertTests {
         #expect(!document.isDirty)
     }
 
-
     /// Reading now happens while the editor stays usable: what is typed
     /// meanwhile must not be replaced by the file's text once it arrives.
     @Test("Edits typed while the file is read again are kept")

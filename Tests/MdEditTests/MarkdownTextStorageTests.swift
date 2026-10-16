@@ -166,7 +166,6 @@ struct MarkdownTextStorageTests {
         #expect(changed.attributedSubstring(from: whole).isEqual(to: fresh.attributedSubstring(from: whole)))
     }
 
-
     @Test("Asking an empty document for an attribute answers nothing rather than raising")
     func emptyAttributeLookup() {
         let storage = storage("")
