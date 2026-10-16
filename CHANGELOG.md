@@ -5,12 +5,36 @@ workflow publishes the section for a version as its release notes.
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-10-16
+
 ### Added
 - Slash commands: typing `/` at the start of a line or after a space opens a
   menu of blocks to make — headings, lists, quotes, code, Mermaid and math
   blocks, tables, dividers, links, images, footnotes and a table of contents.
   Typing narrows it, ↑↓ and Return choose, Escape leaves the `/` as typed, and
   one undo brings the typed command back.
+
+### Fixed
+- Four crashes: undo after a reload from disk, pasting an enormous list
+  start number, a Pandoc that exits early, and an attribute lookup on an
+  empty document.
+- Edits are safer. Recovered text no longer overwrites a file changed since
+  (by a sync or a pull); a file that is not valid UTF-8 is no longer saved
+  over with lossy stand-ins; saving through a symlink or a hard link writes
+  the file itself; a slow checkout no longer leaves a file unwatched; text
+  typed while a file reloads is kept; text a legacy encoding cannot hold can
+  be saved as UTF-8.
+- Files are read and folders listed in the background, so a file still in
+  iCloud or on a slow volume no longer freezes the app.
+- The editor agrees with export on classic Mac line endings, mismatched
+  table rows, multi-line setext headings and reference definitions.
+- Faster parsing of long runs of table rows, `$` and backticks; math and
+  Mermaid blocks no longer queue a render per keystroke.
+- Version history is pruned at launch (90 days, 200 MB); the workspace
+  folder's bookmark can no longer be evicted.
+- Smaller fixes: dead keys and IME input are no longer paired, closing a
+  background tab keeps the front tab, Select All Occurrences stops at
+  10,000, and the update check handles being offline or rate-limited.
 
 ## [1.0.2] - 2026-10-14
 
