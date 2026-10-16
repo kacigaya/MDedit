@@ -5,6 +5,8 @@ workflow publishes the section for a version as its release notes.
 
 ## [Unreleased]
 
+## [1.1.3] - 2026-10-16
+
 ### Changed
 - Tables in the editor are drawn as a grid, as in the preview: cells in the
   body font with lines between them and a shaded header, aligned as the
