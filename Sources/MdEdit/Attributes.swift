@@ -77,10 +77,12 @@ struct ParagraphStyleCache {
         style.headIndent = indent + hangingIndent
         // Code keeps the default's proportion to prose: a little tighter.
         style.lineHeightMultiple = isCode ? theme.lineHeight * (1.2 / 1.35) : theme.lineHeight
-        // Blank lines already separate blocks, so by default only headings add
-        // space of their own; Settings can add more after each block.
+        // Blank lines already separate blocks; Settings can add more after
+        // each one. Nothing goes before a heading: TextKit 1 drops that space
+        // while `## ` is concealed and adds it once the marker shows, so the
+        // page would drop a few points each time the caret reached a heading.
         style.paragraphSpacing = endsBlock ? theme.paragraphSpacing : 0
-        style.paragraphSpacingBefore = isHeading ? theme.bodyFontSize * 0.5 : 0
+        style.paragraphSpacingBefore = 0
         style.tighteningFactorForTruncation = 0
 
         let immutable = style.copy() as! NSParagraphStyle

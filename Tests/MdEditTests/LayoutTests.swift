@@ -112,4 +112,63 @@ struct LayoutTests {
 
         #expect(abs(empty - typed) < 0.01, "empty \(empty), typed \(typed)")
     }
+
+    @Test("Revealing a heading or quote leaves the lines below in place; a quote's marker hangs")
+    func revealHangsMarkers() {
+        let storage = MarkdownTextStorage(theme: .light)
+        storage.replaceCharacters(in: NSRange(location: 0, length: 0), with: "Intro.\n\n## Try it here\n\n> Quoted\n\nAfter.\n")
+        let (manager, container) = layoutManager(contiguous: true, for: storage)
+        let textView = NSTextView(frame: NSRect(x: 0, y: 0, width: 800, height: 600), textContainer: container)
+        textView.textContainerInset = NSSize(width: 100, height: 0)
+
+        /// Where the first glyph of some text sits, and where the last line starts.
+        func positions(of text: String) -> (x: CGFloat, after: CGFloat) {
+            manager.ensureLayout(for: container)
+            let index = (storage.string as NSString).range(of: text).location
+            let glyph = manager.glyphIndexForCharacter(at: index)
+            let fragment = manager.lineFragmentRect(forGlyphAt: glyph, effectiveRange: nil)
+            let last = manager.lineFragmentRect(forGlyphAt: manager.numberOfGlyphs - 1, effectiveRange: nil)
+            return (fragment.minX + manager.location(forGlyphAt: glyph).x, last.minY)
+        }
+
+        let heading = positions(of: "Try it here")
+        let quote = positions(of: "Quoted")
+        storage.revealedLines = 2...2
+        let revealedHeading = positions(of: "Try it here")
+        // A heading's `## ` makes room (the text glides over), but the
+        // heading keeps its height, so nothing below it moves.
+        #expect(revealedHeading.x > heading.x + 1)
+        #expect(abs(revealedHeading.after - heading.after) < 0.5)
+        storage.revealedLines = 4...4
+        let revealedQuote = positions(of: "Quoted")
+        #expect(abs(revealedQuote.x - quote.x) < 0.5)
+        #expect(abs(revealedQuote.after - quote.after) < 0.5)
+    }
+
+    @Test("A reveal glides: its first frame draws every word where it was, its markers unseen")
+    func revealMotionStartsFromOldLayout() {
+        let storage = MarkdownTextStorage(theme: .light)
+        storage.replaceCharacters(in: NSRange(location: 0, length: 0), with: "Intro.\n\nSome **bold** words here.\n")
+        let (manager, container) = layoutManager(contiguous: true, for: storage)
+        manager.ensureLayout(for: container)
+        let text = storage.string as NSString
+        func x(of word: String) -> CGFloat {
+            let glyph = manager.glyphIndexForCharacter(at: text.range(of: word).location)
+            return manager.lineFragmentRect(forGlyphAt: glyph, effectiveRange: nil).minX + manager.location(forGlyphAt: glyph).x
+        }
+        let before = x(of: "words")
+
+        let moved = manager.animateReveal(across: [storage.characterRange(forLines: 2...2)]) { storage.revealedLines = 2...2 }
+        #expect(moved)
+        let motion = try! #require(manager.revealMotion)
+        let wordsGlyph = manager.glyphIndexForCharacter(at: text.range(of: "words").location)
+        // At the start, layout plus the motion's offset is the old place.
+        #expect(abs(x(of: "words") + motion.offset(forGlyph: wordsGlyph, progress: 0).dx - before) < 0.5)
+        #expect(motion.offset(forGlyph: wordsGlyph, progress: 1) == .zero)
+        // The markers that appeared fade in rather than slide.
+        let marker = manager.glyphIndexForCharacter(at: text.range(of: "**").location)
+        #expect(motion.segment(containing: marker)?.fadesIn == true)
+        #expect(motion.progress(at: motion.start) == 0)
+        #expect(motion.progress(at: motion.start + motion.duration) == 1)
+    }
 }

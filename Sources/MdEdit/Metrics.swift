@@ -74,8 +74,8 @@ enum Motion {
 
     /// Hover washes and small state changes.
     static let quick: TimeInterval = 0.12
-    /// The text settling as a line reveals or hides its markdown.
-    static let fade: TimeInterval = 0.18
+    /// Text gliding into place as a line reveals or hides its markdown.
+    nonisolated static let reveal: TimeInterval = 0.34
     /// Tabs, menus and page fades.
     static let standard: TimeInterval = 0.24
     /// Panels that move a lot of the window, such as the sidebar.

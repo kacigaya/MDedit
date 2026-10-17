@@ -12,6 +12,9 @@ final class MarkdownLayoutManager: NSLayoutManager {
     /// In focus mode, the range left at full contrast; everything else dims.
     var focusRange: NSRange?
 
+    /// Text gliding into place after a line revealed or hid its markdown.
+    var revealMotion: RevealMotion?
+
     private var substituteGlyphs: [String: CGGlyph] = [:]
 
     override init() {
@@ -27,7 +30,7 @@ final class MarkdownLayoutManager: NSLayoutManager {
 
     /// Focus mode dims every line but the one being written.
     override func drawGlyphs(forGlyphRange glyphsToShow: NSRange, at origin: NSPoint) {
-        super.drawGlyphs(forGlyphRange: glyphsToShow, at: origin)
+        drawThroughMotion(glyphsToShow, at: origin) { super.drawGlyphs(forGlyphRange: $0, at: $1) }
         drawInlineMath(forGlyphRange: glyphsToShow, at: origin)
         guard let focusRange, let container = textContainers.first else { return }
 
@@ -70,6 +73,22 @@ final class MarkdownLayoutManager: NSLayoutManager {
     // MARK: - Block decoration
 
     override func drawBackground(forGlyphRange glyphsToShow: NSRange, at origin: NSPoint) {
+        drawBackgroundThroughMotion(glyphsToShow, at: origin) { drawDecoratedBackground(forGlyphRange: $0, at: $1) }
+    }
+
+    /// An edit renumbers the glyphs a motion refers to, so it stops there.
+    override func processEditing(
+        for textStorage: NSTextStorage,
+        edited editMask: NSTextStorageEditActions,
+        range newCharRange: NSRange,
+        changeInLength delta: Int,
+        invalidatedRange invalidatedCharRange: NSRange
+    ) {
+        if editMask.contains(.editedCharacters) { revealMotion = nil }
+        super.processEditing(for: textStorage, edited: editMask, range: newCharRange, changeInLength: delta, invalidatedRange: invalidatedCharRange)
+    }
+
+    private func drawDecoratedBackground(forGlyphRange glyphsToShow: NSRange, at origin: NSPoint) {
         super.drawBackground(forGlyphRange: glyphsToShow, at: origin)
         guard let storage = textStorage, let container = textContainers.first else { return }
 
@@ -108,6 +127,8 @@ final class MarkdownLayoutManager: NSLayoutManager {
 
             if let markdown = storage as? MarkdownTextStorage, markdown.numberHeadings,
                self.isFirstFragmentOfParagraph(lineCharacters.location, in: storage),
+               // Revealed markers hang where the number would go.
+               self.hangingMarkers(at: lineCharacters.location, in: storage) == nil,
                let number = markdown.headingNumber(forLine: markdown.line(at: lineCharacters.location)) {
                 self.drawHeadingNumber(number, glyphRange: lineGlyphRange, fragment: fragmentRect, attributes: attributes, origin: origin)
             }
@@ -376,7 +397,55 @@ final class MarkdownLayoutManager: NSLayoutManager {
     }
 }
 
+extension MarkdownLayoutManager {
+    /// Marker kinds that hang into the margin when revealed: a quote's `>`,
+    /// which sits beside the quote bar. Everything else, a heading's `## `
+    /// included, makes room in the line and the text glides over for it.
+    private static let hangingKinds: Set<Int> = [MarkerKind.quote.rawValue]
+
+    /// The revealed quote markers a line starts with, when the line starts
+    /// here; nil if it has none.
+    fileprivate func hangingMarkers(at location: Int, in storage: NSTextStorage) -> NSRange? {
+        let text = Self.text(of: storage)
+        guard location < storage.length, location == 0 || text.character(at: location - 1) == 0x0A else { return nil }
+        var end = location
+        // Markers are short; this bounds the walk on a malformed line.
+        let limit = min(storage.length, location + 16)
+        while end < limit {
+            let attributes = storage.attributes(at: end, effectiveRange: nil)
+            guard let kind = attributes[.mdMarker] as? Int, Self.hangingKinds.contains(kind),
+                  attributes[.mdConcealed] == nil, text.character(at: end) != 0x0A
+            else { break }
+            end += 1
+        }
+        return end > location ? NSRange(location: location, length: end - location) : nil
+    }
+}
+
 extension MarkdownLayoutManager: NSLayoutManagerDelegate {
+    /// A revealed quote's `> ` hangs into the margin beside the quote bar,
+    /// so the quoted text stays where it sat while the marker was hidden.
+    func layoutManager(
+        _ layoutManager: NSLayoutManager,
+        shouldSetLineFragmentRect lineFragmentRect: UnsafeMutablePointer<NSRect>,
+        lineFragmentUsedRect: UnsafeMutablePointer<NSRect>,
+        baselineOffset: UnsafeMutablePointer<CGFloat>,
+        in textContainer: NSTextContainer,
+        forGlyphRange glyphRange: NSRange
+    ) -> Bool {
+        guard let storage = textStorage, glyphRange.length > 0 else { return false }
+        let start = characterIndexForGlyph(at: glyphRange.location)
+        guard let markers = hangingMarkers(at: start, in: storage) else { return false }
+        let width = storage.attributedSubstring(from: markers).size().width
+        // Only as far as the margin goes: a narrow window has little to spare.
+        let margin = lineFragmentRect.pointee.minX + (firstTextView?.textContainerInset.width ?? 0)
+        let shift = min(width, max(0, margin))
+        guard shift > 0 else { return false }
+        lineFragmentRect.pointee.origin.x -= shift
+        lineFragmentUsedRect.pointee.origin.x -= shift
+        return true
+    }
+
     /// Concealed markers produce no glyphs, so `**bold**` reads as bold — while
     /// the characters are still there for the caret, selection and undo.
     func layoutManager(
