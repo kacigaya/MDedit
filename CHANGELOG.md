@@ -5,6 +5,27 @@ workflow publishes the section for a version as its release notes.
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-10-17
+
+### Changed
+- A quieter, warmer look. The Default theme uses ink-coloured text on a paper
+  canvas, red inline code, a dark quote bar and soft yellow highlights, in
+  light and dark.
+- The sidebar sits on its own tinted surface behind a hairline, with a
+  capsule switcher for Files, Outline and Search and rounded hover and
+  selection rows. Showing or hiding it slides instead of jumping.
+- The slash menu fades in and shows each block on an icon tile, with a soft
+  highlight for the chosen one. Tabs light up under the pointer.
+- Code blocks are a single rounded card around their code.
+- Moving onto a line no longer snaps it: words glide aside as its markdown
+  appears, new markers fade in, and the lines below glide if it rewraps. A
+  quote's `>` appears in the margin beside its bar. Reduce Motion turns the
+  movement off.
+
+### Fixed
+- Lines below a heading no longer drop a few points when the caret reaches
+  it.
+
 ## [1.1.4] - 2026-10-16
 
 ### Changed
