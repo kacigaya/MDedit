@@ -18,7 +18,10 @@ bold with the asterisks hidden, until you move the caret onto that line and the 
 markdown comes back. There is no split pane and no preview mode to switch to.
 
 <p align="center">
-  <img alt="MdEdit editing a markdown document" src="docs/screenshot.png">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/screenshot-dark.png">
+    <img alt="MdEdit editing a markdown document" src="docs/screenshot-light.png">
+  </picture>
 </p>
 
 ## Features
