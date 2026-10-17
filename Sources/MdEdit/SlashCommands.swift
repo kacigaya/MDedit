@@ -92,10 +92,10 @@ final class SlashMenu: NSObject {
     var isActive: Bool { start != nil }
     var isShowing: Bool { panel.isVisible }
 
-    private static let rowHeight: CGFloat = 28
-    private static let width: CGFloat = 290
+    private static let rowHeight: CGFloat = 36
+    private static let width: CGFloat = 300
     private static let visibleRows = 8
-    private static let margin: CGFloat = 5
+    private static let margin: CGFloat = 6
 
     let panel: NSPanel
     private let table = HoverTable()
@@ -130,7 +130,7 @@ final class SlashMenu: NSObject {
         content.state = .active
         // A mask rather than a layer's corner radius, so the window's shadow
         // follows the rounded corners.
-        content.maskImage = Self.roundedMask(radius: 10)
+        content.maskImage = Self.roundedMask(radius: 12)
 
         table.addTableColumn(NSTableColumn(identifier: .init("command")))
         table.headerView = nil
@@ -196,7 +196,19 @@ final class SlashMenu: NSObject {
             panel.parent?.removeChildWindow(panel)
             window.addChildWindow(panel, ordered: .above)
         }
-        panel.orderFront(nil)
+        // Opening, the menu fades up out of the line rather than popping in.
+        if !panel.isVisible, Motion.isEnabled {
+            panel.alphaValue = 0
+            panel.orderFront(nil)
+            NSAnimationContext.runAnimationGroup { context in
+                context.duration = Motion.quick
+                context.timingFunction = Motion.curve
+                panel.animator().alphaValue = 1
+            }
+        } else {
+            panel.alphaValue = 1
+            panel.orderFront(nil)
+        }
         panel.invalidateShadow()
         if observedWindow !== window {
             stopObserving()
@@ -300,17 +312,21 @@ extension SlashMenu: NSTableViewDataSource, NSTableViewDelegate {
         if table.selectedRow >= 0 { selectedIndex = table.selectedRow }
     }
 
-    /// The panel is never key, which would grey the selection; it is the
-    /// menu's focus, so it shows in the accent colour, rounded as in menus.
+    /// The chosen row is a soft rounded wash, as in Notion's menus, so its
+    /// icon tile and text keep their colours.
     private final class RowView: NSTableRowView {
         override var isEmphasized: Bool {
-            get { true }
+            get { false }
             set {}
         }
 
         override func drawSelection(in dirtyRect: NSRect) {
-            NSColor.controlAccentColor.setFill()
-            NSBezierPath(roundedRect: bounds.insetBy(dx: 5, dy: 0), xRadius: 5, yRadius: 5).fill()
+            NSColor.labelColor.withAlphaComponent(0.08).setFill()
+            NSBezierPath(
+                roundedRect: bounds.insetBy(dx: Metrics.rowInset, dy: 1),
+                xRadius: Metrics.rowRadius,
+                yRadius: Metrics.rowRadius
+            ).fill()
         }
     }
 
@@ -322,10 +338,14 @@ extension SlashMenu: NSTableViewDataSource, NSTableViewDelegate {
             super.init(frame: .zero)
             let icon = NSImageView(image: NSImage(systemSymbolName: command.symbol, accessibilityDescription: nil) ?? NSImage())
             icon.symbolConfiguration = .init(pointSize: 13, weight: .regular)
-            icon.contentTintColor = .labelColor
+            icon.contentTintColor = .secondaryLabelColor
             icon.translatesAutoresizingMaskIntoConstraints = false
+            // Each command's symbol sits on a small tile, as Notion's blocks do.
+            let tile = IconTile()
+            tile.translatesAutoresizingMaskIntoConstraints = false
+            tile.addSubview(icon)
             let title = NSTextField(labelWithString: command.title)
-            title.font = .systemFont(ofSize: 13)
+            title.font = .systemFont(ofSize: 13, weight: .medium)
             title.lineBreakMode = .byTruncatingTail
             hint.font = .monospacedSystemFont(ofSize: 11, weight: .regular)
             hint.textColor = .secondaryLabelColor
@@ -333,14 +353,17 @@ extension SlashMenu: NSTableViewDataSource, NSTableViewDelegate {
             imageView = icon
             textField = title
 
-            let stack = NSStackView(views: [icon, title, NSView(), hint])
+            let stack = NSStackView(views: [tile, title, NSView(), hint])
             stack.orientation = .horizontal
-            stack.spacing = 8
-            stack.edgeInsets = NSEdgeInsets(top: 0, left: 12, bottom: 0, right: 12)
+            stack.spacing = 10
+            stack.edgeInsets = NSEdgeInsets(top: 0, left: 12, bottom: 0, right: 14)
             stack.translatesAutoresizingMaskIntoConstraints = false
             addSubview(stack)
             NSLayoutConstraint.activate([
-                icon.widthAnchor.constraint(equalToConstant: 18),
+                tile.widthAnchor.constraint(equalToConstant: 26),
+                tile.heightAnchor.constraint(equalToConstant: 26),
+                icon.centerXAnchor.constraint(equalTo: tile.centerXAnchor),
+                icon.centerYAnchor.constraint(equalTo: tile.centerYAnchor),
                 stack.leadingAnchor.constraint(equalTo: leadingAnchor),
                 stack.trailingAnchor.constraint(equalTo: trailingAnchor),
                 stack.centerYAnchor.constraint(equalTo: centerYAnchor),
@@ -351,13 +374,27 @@ extension SlashMenu: NSTableViewDataSource, NSTableViewDelegate {
         @available(*, unavailable)
         required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
 
-        override var backgroundStyle: NSView.BackgroundStyle {
-            didSet {
-                let selected = backgroundStyle == .emphasized
-                hint.textColor = selected ? .alternateSelectedControlTextColor : .secondaryLabelColor
-                textField?.textColor = selected ? .alternateSelectedControlTextColor : .labelColor
-                imageView?.contentTintColor = selected ? .alternateSelectedControlTextColor : .labelColor
-            }
+    }
+
+    /// A rounded square behind a command's symbol, raised off the menu.
+    private final class IconTile: NSView {
+        override var wantsUpdateLayer: Bool { true }
+
+        override init(frame frameRect: NSRect) {
+            super.init(frame: frameRect)
+            wantsLayer = true
+            layer?.cornerRadius = 6
+            layer?.cornerCurve = .continuous
+            layer?.borderWidth = 0.5
+        }
+
+        @available(*, unavailable)
+        required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
+
+        // Resolved here so the tile follows light and dark.
+        override func updateLayer() {
+            layer?.backgroundColor = NSColor.controlBackgroundColor.cgColor
+            layer?.borderColor = NSColor.separatorColor.cgColor
         }
     }
 }

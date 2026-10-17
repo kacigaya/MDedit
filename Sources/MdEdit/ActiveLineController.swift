@@ -20,6 +20,9 @@ final class ActiveLineController {
 
     static let maxRevealedLines = 100
 
+    /// A picture of the text as it was, fading out over the new layout.
+    private var crossfade: NSView?
+
     init(storage: MarkdownTextStorage, textView: NSTextView) {
         self.storage = storage
         self.textView = textView
@@ -40,7 +43,14 @@ final class ActiveLineController {
         // Past a screenful, a selection is for copying, moving or deleting,
         // not for editing its syntax: only the line it ends on shows as
         // written, instead of every line in it restyling and reflowing.
-        storage.revealedLines = lastLine - firstLine <= Self.maxRevealedLines ? firstLine...lastLine : lastLine...lastLine
+        let revealed = lastLine - firstLine <= Self.maxRevealedLines ? firstLine...lastLine : lastLine...lastLine
+        if revealed != storage.revealedLines, shouldCrossfade {
+            // Markers appearing push the line's text along and can nudge the
+            // lines below; fading from the old layout softens that jump.
+            crossfade(in: textView) { storage.revealedLines = revealed }
+        } else {
+            storage.revealedLines = revealed
+        }
 
         if let manager = textView.layoutManager as? MarkdownLayoutManager {
             let old = manager.focusRange
@@ -62,6 +72,47 @@ final class ActiveLineController {
 
         if typewriterMode {
             centreCaret(animated: true)
+        }
+    }
+
+    /// Only a move the reader made, by clicking or with the arrow keys, fades:
+    /// not typing a new line, and not each step of a drag selection.
+    private var shouldCrossfade: Bool {
+        guard Motion.isEnabled, textView?.window?.isVisible == true, let event = NSApp.currentEvent else { return false }
+        switch event.type {
+        case .leftMouseDown, .leftMouseUp:
+            return true
+        case .keyDown:
+            let navigation: [NSEvent.SpecialKey] = [.upArrow, .downArrow, .leftArrow, .rightArrow, .pageUp, .pageDown, .home, .end]
+            return event.specialKey.map(navigation.contains) ?? false
+        default:
+            return false
+        }
+    }
+
+    /// Lays a snapshot of the visible text over the view, makes the change
+    /// underneath, and fades the snapshot away.
+    private func crossfade(in textView: NSTextView, _ change: () -> Void) {
+        let rect = textView.visibleRect
+        crossfade?.removeFromSuperview()
+        crossfade = nil
+        guard rect.width > 0, rect.height > 0, let snapshot = textView.bitmapImageRepForCachingDisplay(in: rect) else {
+            return change()
+        }
+        textView.cacheDisplay(in: rect, to: snapshot)
+        let overlay = PassThroughView(frame: rect)
+        overlay.wantsLayer = true
+        overlay.layer?.contents = snapshot.cgImage
+        overlay.layer?.contentsGravity = .resize
+        textView.addSubview(overlay)
+        crossfade = overlay
+
+        change()
+        Motion.animate(Motion.fade) {
+            overlay.animator().alphaValue = 0
+        } completion: { [weak self, weak overlay] in
+            overlay?.removeFromSuperview()
+            if self?.crossfade === overlay { self?.crossfade = nil }
         }
     }
 
@@ -97,4 +148,10 @@ final class ActiveLineController {
             scrollView.reflectScrolledClipView(scrollView.contentView)
         }
     }
+}
+
+/// A view the mouse goes straight through, so a click or the second half of
+/// a double-click lands on the text beneath it.
+private final class PassThroughView: NSView {
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
 }

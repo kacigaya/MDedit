@@ -44,8 +44,6 @@ final class TabBarView: NSView {
 
     private var theme: Theme = .current(for: NSApp.effectiveAppearance)
 
-    private static let animationDuration: TimeInterval = 0.14
-
     override init(frame frameRect: NSRect) {
         thumb = GlassPanel(
             content: NSView(),
@@ -154,8 +152,8 @@ final class TabBarView: NSView {
         // With no thumb to slide from, it fades in where it lands.
         if thumb.isHidden { thumb.alphaValue = 0 }
         NSAnimationContext.runAnimationGroup { context in
-            context.duration = Self.animationDuration
-            context.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            context.duration = Motion.standard
+            context.timingFunction = Motion.curve
             // Lets each segment's title follow its frame instead of jumping.
             context.allowsImplicitAnimation = true
             layoutSegments(animated: true)
@@ -196,7 +194,7 @@ final class TabBarView: NSView {
     private var shouldAnimate: Bool {
         window?.isVisible == true
             && track.bounds.width > 0
-            && !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+            && Motion.isEnabled
     }
 
     private func slotFrame(at index: Int, count: Int) -> NSRect {
@@ -286,6 +284,7 @@ final class TabSegment: NSView {
     private var isDirty = false
     private var isSelected = false
     private var isHovering = false
+    private var hoverFill: NSColor = .clear
 
     init(index: Int, id: UUID = UUID()) {
         self.index = index
@@ -294,6 +293,8 @@ final class TabSegment: NSView {
         // Placed by the tab bar's frames; clipped so it can open from nothing.
         wantsLayer = true
         clipsToBounds = true
+        layer?.cornerRadius = Metrics.trackHeight / 2
+        layer?.cornerCurve = .continuous
 
         label.font = .systemFont(ofSize: 13, weight: .medium)
         label.alignment = .center
@@ -352,6 +353,7 @@ final class TabSegment: NSView {
         label.textColor = isSelected ? theme.text : theme.secondaryText
         closeButton.contentTintColor = theme.secondaryText
         dirtyDot.layer?.backgroundColor = theme.secondaryText.cgColor
+        hoverFill = theme.hoverFill
         isDirty = tab.isDirty
         self.isSelected = isSelected
         toolTip = tab.title
@@ -388,6 +390,8 @@ final class TabSegment: NSView {
     private func updateHoverItems() {
         closeButton.isHidden = !isHovering
         dirtyDot.isHidden = !isDirty
+        // A wash under the pointer on tabs the thumb is not already marking.
+        layer?.backgroundColor = (isHovering && !isSelected ? hoverFill : .clear).cgColor
     }
 
     override func updateTrackingAreas() {

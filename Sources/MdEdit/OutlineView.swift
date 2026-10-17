@@ -22,8 +22,8 @@ final class OutlineView: NSView {
         let column = NSTableColumn(identifier: .init("heading"))
         table.addTableColumn(column)
         table.headerView = nil
-        table.rowHeight = 24
-        table.intercellSpacing = NSSize(width: 0, height: 2)
+        table.rowHeight = 26
+        table.intercellSpacing = NSSize(width: 0, height: 1)
         table.style = .sourceList
         table.backgroundColor = .clear
         table.dataSource = self
@@ -98,6 +98,12 @@ extension OutlineView: NSTableViewDataSource, NSTableViewDelegate {
         headings.count
     }
 
+    func tableView(_ tableView: NSTableView, rowViewForRow row: Int) -> NSTableRowView? {
+        let row = SidebarRowView()
+        row.theme = theme
+        return row
+    }
+
     func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
         let identifier = NSUserInterfaceItemIdentifier("OutlineCell")
         let cell = tableView.makeView(withIdentifier: identifier, owner: nil) as? OutlineCell ?? OutlineCell()
@@ -142,6 +148,6 @@ private final class OutlineCell: NSTableCellView {
         label.toolTip = title
         label.font = level == 1 ? .systemFont(ofSize: 13, weight: .semibold) : .systemFont(ofSize: 12.5)
         label.textColor = level <= 2 ? theme.text : theme.secondaryText
-        leading.constant = 6 + CGFloat(max(0, level - 1)) * 12
+        leading.constant = 8 + CGFloat(max(0, level - 1)) * 12
     }
 }

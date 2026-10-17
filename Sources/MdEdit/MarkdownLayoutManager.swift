@@ -75,6 +75,9 @@ final class MarkdownLayoutManager: NSLayoutManager {
 
         let characterRange = self.characterRange(forGlyphRange: glyphsToShow, actualGlyphRange: nil)
 
+        // Each code block is filled once, as a whole, wherever its lines start.
+        var drawnCodeBlocks = Set<Int>()
+
         enumerateLineFragments(forGlyphRange: glyphsToShow) { fragmentRect, usedRect, _, lineGlyphRange, _ in
             let lineCharacters = self.characterRange(forGlyphRange: lineGlyphRange, actualGlyphRange: nil)
             guard lineCharacters.location < storage.length else { return }
@@ -116,8 +119,10 @@ final class MarkdownLayoutManager: NSLayoutManager {
             rect.size.width = container.size.width
 
             if attributes[.mdCodeBlock] != nil {
-                self.theme.codeBackground.setFill()
-                rect.fill()
+                let block = self.codeBlockRange(containing: lineCharacters.location, in: storage)
+                if drawnCodeBlocks.insert(block.location).inserted {
+                    self.drawCodeCard(for: block, in: container, origin: origin)
+                }
             }
 
             if let grid = attributes[.mdTableRow] as? TableGrid {
@@ -176,6 +181,88 @@ final class MarkdownLayoutManager: NSLayoutManager {
                 NSBezierPath(roundedRect: chip, xRadius: 3, yRadius: 3).fill()
             }
         }
+    }
+
+    /// Whether the character at an index is in a code block.
+    private func isCode(at index: Int, in storage: NSTextStorage) -> Bool {
+        index >= 0 && index < storage.length && storage.attribute(.mdCodeBlock, at: index, effectiveRange: nil) != nil
+    }
+
+    /// The whole code block around a character, across line breaks
+    /// whether or not the breaks themselves carry the attribute.
+    private func codeBlockRange(containing index: Int, in storage: NSTextStorage) -> NSRange {
+        let text = storage.string as NSString
+        var start = index
+        var end = index
+        func effective(_ at: Int) -> NSRange {
+            var range = NSRange()
+            storage.attribute(.mdCodeBlock, at: at, longestEffectiveRange: &range, in: NSRange(location: 0, length: storage.length))
+            return range
+        }
+        var range = effective(index)
+        start = range.location
+        end = NSMaxRange(range)
+        while true {
+            if isCode(at: start - 1, in: storage) {
+                start = effective(start - 1).location
+            } else if start >= 2, text.character(at: start - 1) == 0x0A, isCode(at: start - 2, in: storage) {
+                start = effective(start - 2).location
+            } else { break }
+        }
+        while true {
+            if isCode(at: end, in: storage) {
+                end = NSMaxRange(effective(end))
+            } else if end < storage.length - 1, text.character(at: end) == 0x0A, isCode(at: end + 1, in: storage) {
+                end = NSMaxRange(effective(end + 1))
+            } else { break }
+        }
+        range = NSRange(location: start, length: end - start)
+        return range
+    }
+
+    /// Fills a code block as one card with rounded corners, around the
+    /// lines that show text. Hidden fences are left outside it: their
+    /// concealed glyphs ride on the line before, which would otherwise
+    /// stretch the card over empty space.
+    private func drawCodeCard(for block: NSRange, in container: NSTextContainer, origin: NSPoint) {
+        guard let storage = textStorage else { return }
+        let glyphs = glyphRange(forCharacterRange: block, actualCharacterRange: nil)
+        guard glyphs.length > 0 else { return }
+        let text = storage.string as NSString
+        var top: CGFloat?
+        var bottom: CGFloat = 0
+        enumerateLineFragments(forGlyphRange: glyphs) { _, usedRect, _, lineGlyphs, _ in
+            let shown = lineGlyphs.intersection(glyphs) ?? NSRange(location: 0, length: 0)
+            let showsText = (shown.location..<NSMaxRange(shown)).contains { glyph in
+                guard self.attribute(forGlyphAt: glyph) else { return false }
+                let character = self.characterIndexForGlyph(at: glyph)
+                guard character < text.length else { return false }
+                // Code lines left blank inside a block still belong to it;
+                // only line breaks and hidden markers do not count.
+                let unit = text.character(at: character)
+                return unit != 0x0A && unit != 0x0D
+                    || storage.attribute(.mdMarker, at: character, effectiveRange: nil) == nil
+                        && self.isBlankCodeLine(at: character, in: text)
+            }
+            guard showsText else { return }
+            if top == nil { top = usedRect.minY }
+            bottom = usedRect.maxY
+        }
+        guard let top, bottom > top else { return }
+        let padding = Metrics.codeCardPadding
+        let card = NSRect(
+            x: origin.x,
+            y: origin.y + top - padding,
+            width: container.size.width,
+            height: bottom - top + 2 * padding
+        )
+        theme.codeBackground.setFill()
+        NSBezierPath(roundedRect: card, xRadius: Metrics.codeCardRadius, yRadius: Metrics.codeCardRadius).fill()
+    }
+
+    /// Whether the line break at an index ends an empty line.
+    private func isBlankCodeLine(at index: Int, in text: NSString) -> Bool {
+        index == 0 || text.character(at: index - 1) == 0x0A
     }
 
     /// A table row's cell lines, as in rendered output: each row draws the

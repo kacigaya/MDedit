@@ -20,8 +20,12 @@ final class MainWindowController: NSWindowController {
     private let tabBar = TabBarView()
     private let statusBar = StatusBarView()
     private let sidebar = SidebarView()
-    /// Pins the current editor's leading edge to the window or the sidebar.
-    private var editorLeading: NSLayoutConstraint?
+    /// Slides the sidebar in from the window's edge, or out past it; the
+    /// editor rides along on its trailing edge.
+    private lazy var sidebarLeading = sidebar.leadingAnchor.constraint(
+        equalTo: canvas.leadingAnchor,
+        constant: isSidebarVisible ? 0 : -Metrics.sidebarWidth
+    )
     private var isSidebarVisible = UserDefaults.standard.bool(forKey: "showSidebar")
     private var pendingOutlineRefresh: DispatchWorkItem?
     /// Typing changes the text and the selection, and each asks for the
@@ -159,7 +163,7 @@ final class MainWindowController: NSWindowController {
             statusBar.trailingAnchor.constraint(equalTo: canvas.trailingAnchor),
             statusBar.bottomAnchor.constraint(equalTo: canvas.bottomAnchor),
 
-            sidebar.leadingAnchor.constraint(equalTo: canvas.leadingAnchor),
+            sidebarLeading,
             // Below the titlebar and tab strip: under the glass, the list
             // would be refracted into the chrome.
             sidebar.topAnchor.constraint(equalTo: (window.contentLayoutGuide as? NSLayoutGuide)?.topAnchor ?? canvas.topAnchor),
@@ -274,25 +278,17 @@ final class MainWindowController: NSWindowController {
 
     /// The incoming tab's page fades up as the thumb slides to it.
     private func fadeIn(_ view: NSView) {
-        guard window?.isVisible == true, !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion else { return }
+        guard window?.isVisible == true, Motion.isEnabled else { return }
         view.alphaValue = 0
-        NSAnimationContext.runAnimationGroup { context in
-            context.duration = 0.1
-            context.timingFunction = CAMediaTimingFunction(name: .easeOut)
-            view.animator().alphaValue = 1
-        }
+        Motion.animate(Motion.standard) { view.animator().alphaValue = 1 }
     }
 
     private func install(_ editor: EditorViewController) {
         contentController.addChild(editor)
         editor.view.translatesAutoresizingMaskIntoConstraints = false
         canvas.addSubview(editor.view, positioned: .below, relativeTo: statusBar)
-        let leading = editor.view.leadingAnchor.constraint(
-            equalTo: isSidebarVisible ? sidebar.trailingAnchor : canvas.leadingAnchor
-        )
-        editorLeading = leading
         NSLayoutConstraint.activate([
-            leading,
+            editor.view.leadingAnchor.constraint(equalTo: sidebar.trailingAnchor),
             editor.view.trailingAnchor.constraint(equalTo: canvas.trailingAnchor),
             // Below the titlebar, which stays an opaque band of canvas colour
             // rather than showing the text scrolled beneath it.
@@ -847,13 +843,22 @@ final class MainWindowController: NSWindowController {
     private func setSidebarVisible(_ visible: Bool) {
         isSidebarVisible = visible
         UserDefaults.standard.set(visible, forKey: "showSidebar")
-        sidebar.isHidden = !visible
-        if let editor = currentEditor {
-            editorLeading?.isActive = false
-            editorLeading = editor.view.leadingAnchor.constraint(
-                equalTo: visible ? sidebar.trailingAnchor : canvas.leadingAnchor
-            )
-            editorLeading?.isActive = true
+        if visible { sidebar.isHidden = false }
+        let animated = window?.isVisible == true && Motion.isEnabled
+        canvas.layoutSubtreeIfNeeded()
+        sidebarLeading.constant = visible ? 0 : -Metrics.sidebarWidth
+        if animated {
+            Motion.animate(Motion.slow) {
+                sidebar.animator().alphaValue = visible ? 1 : 0
+                canvas.layoutSubtreeIfNeeded()
+            } completion: { [weak self] in
+                // A quick second toggle may have brought it back meanwhile.
+                guard let self, !isSidebarVisible else { return }
+                sidebar.isHidden = true
+            }
+        } else {
+            sidebar.alphaValue = visible ? 1 : 0
+            sidebar.isHidden = !visible
         }
         refreshSidebar()
     }

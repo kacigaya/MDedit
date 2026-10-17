@@ -154,6 +154,12 @@ extension SearchPaneView: NSOutlineViewDataSource, NSOutlineViewDelegate {
         item is FileGroup
     }
 
+    func outlineView(_ outlineView: NSOutlineView, rowViewForItem item: Any) -> NSTableRowView? {
+        let row = SidebarRowView()
+        row.theme = theme
+        return row
+    }
+
     func outlineView(_ outlineView: NSOutlineView, viewFor tableColumn: NSTableColumn?, item: Any) -> NSView? {
         let label = NSTextField(labelWithString: "")
         label.lineBreakMode = .byTruncatingTail

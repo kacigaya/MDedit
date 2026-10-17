@@ -1,4 +1,5 @@
-import CoreGraphics
+import AppKit
+import QuartzCore
 
 /// Layout constants shared by every piece of chrome.
 ///
@@ -50,4 +51,57 @@ enum Metrics {
 
     /// Typeset diagrams and formulas are scaled down to this height.
     static let maxDiagramHeight: CGFloat = 900
+
+    /// Space a code card leaves above its first line and below its last.
+    static let codeCardPadding: CGFloat = 8
+
+    /// Corner radius of a code card.
+    static let codeCardRadius: CGFloat = 8
+
+    /// Corner radius of a row's hover and selection wash in lists and menus.
+    static let rowRadius: CGFloat = 6
+
+    /// Inset of that wash from the list's edges.
+    static let rowInset: CGFloat = 6
+}
+
+/// How chrome moves: one curve and a few durations, so everything that
+/// slides or fades settles the same way.
+@MainActor
+enum Motion {
+    /// A fast start that eases long into place, close to the system's springs.
+    static var curve: CAMediaTimingFunction { CAMediaTimingFunction(controlPoints: 0.2, 0.9, 0.25, 1) }
+
+    /// Hover washes and small state changes.
+    static let quick: TimeInterval = 0.12
+    /// The text settling as a line reveals or hides its markdown.
+    static let fade: TimeInterval = 0.18
+    /// Tabs, menus and page fades.
+    static let standard: TimeInterval = 0.24
+    /// Panels that move a lot of the window, such as the sidebar.
+    static let slow: TimeInterval = 0.32
+
+    /// Animations play only for those who have not asked for less motion.
+    static var isEnabled: Bool { !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion }
+
+    /// Runs changes on the shared curve, or at once when motion is reduced.
+    static func animate(
+        _ duration: TimeInterval = standard,
+        _ changes: () -> Void,
+        completion: (@MainActor () -> Void)? = nil
+    ) {
+        guard isEnabled else {
+            changes()
+            completion?()
+            return
+        }
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = duration
+            context.timingFunction = curve
+            context.allowsImplicitAnimation = true
+            changes()
+        } completionHandler: {
+            MainActor.assumeIsolated { completion?() }
+        }
+    }
 }

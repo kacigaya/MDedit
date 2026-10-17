@@ -10,7 +10,8 @@ final class StatusBarView: NSView {
     private let counts = NSButton(title: "", target: nil, action: nil)
     private let goalProgress = NSProgressIndicator()
     private let details = NSTextField(labelWithString: "")
-    private let separator = NSBox()
+    /// A plain view rather than a separator box, so it takes the theme's hairline.
+    private let separator = NSView()
     private var textColor: NSColor = .secondaryLabelColor
 
     /// Asked to show statistics, anchored to the counts.
@@ -41,7 +42,7 @@ final class StatusBarView: NSView {
             addSubview(view)
         }
 
-        separator.boxType = .separator
+        separator.wantsLayer = true
         separator.translatesAutoresizingMaskIntoConstraints = false
         addSubview(separator)
 
@@ -49,6 +50,7 @@ final class StatusBarView: NSView {
             separator.leadingAnchor.constraint(equalTo: leadingAnchor),
             separator.trailingAnchor.constraint(equalTo: trailingAnchor),
             separator.topAnchor.constraint(equalTo: topAnchor),
+            separator.heightAnchor.constraint(equalToConstant: 1),
 
             counts.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 14),
             counts.centerYAnchor.constraint(equalTo: centerYAnchor),
@@ -73,6 +75,7 @@ final class StatusBarView: NSView {
         details.textColor = theme.secondaryText
         counts.attributedTitle = NSAttributedString(string: counts.title, attributes: titleAttributes)
         layer?.backgroundColor = theme.canvas.cgColor
+        separator.layer?.backgroundColor = theme.hairline.cgColor
     }
 
     private var titleAttributes: [NSAttributedString.Key: Any] {

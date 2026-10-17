@@ -128,6 +128,21 @@ struct Theme: Equatable {
         (canvas.usingColorSpace(.sRGB)?.brightnessComponent ?? 1) < 0.5
     }
 
+    /// The sidebar's surface: the canvas tinted a shade towards the ink, so
+    /// the two read as one sheet with the sidebar set a little back.
+    var sidebarFill: NSColor {
+        canvas.usingColorSpace(.sRGB)?.blended(withFraction: isDark ? 0.045 : 0.035, of: text.usingColorSpace(.sRGB) ?? text) ?? canvas
+    }
+
+    /// Behind a row under the pointer, in lists and menus.
+    var hoverFill: NSColor { text.withAlphaComponent(isDark ? 0.07 : 0.05) }
+
+    /// Behind the chosen row: a soft wash rather than a slab of accent.
+    var selectionFill: NSColor { text.withAlphaComponent(isDark ? 0.11 : 0.08) }
+
+    /// A hairline between surfaces, lighter than the system separator.
+    var hairline: NSColor { text.withAlphaComponent(isDark ? 0.09 : 0.07) }
+
     // Styling asks for these several times per line, so each font is looked
     // up once and kept: building an `NSFont` is a font-descriptor search.
     var body: NSFont {
@@ -165,37 +180,41 @@ struct Theme: Equatable {
         }
     }
 
+    // Warm, quiet neutrals in the manner of Notion: ink rather than black,
+    // paper rather than grey, and colour kept for links and code.
     static let light = Theme(
-        canvas: NSColor(white: 0.99, alpha: 1),
-        text: NSColor(white: 0.13, alpha: 1),
-        heading: NSColor(white: 0.07, alpha: 1),
-        marker: NSColor(white: 0.62, alpha: 1),
-        secondaryText: NSColor(white: 0.45, alpha: 1),
-        link: NSColor(calibratedRed: 0.10, green: 0.42, blue: 0.85, alpha: 1),
-        codeText: NSColor(calibratedRed: 0.63, green: 0.17, blue: 0.33, alpha: 1),
-        codeBackground: NSColor(white: 0.94, alpha: 1),
-        quoteBar: NSColor(white: 0.80, alpha: 1),
-        quoteText: NSColor(white: 0.38, alpha: 1),
-        rule: NSColor(white: 0.85, alpha: 1),
+        canvas: NSColor(hex: "#ffffff")!,
+        text: NSColor(hex: "#37352f")!,
+        heading: NSColor(hex: "#2b2a26")!,
+        marker: NSColor(hex: "#a5a29c")!,
+        secondaryText: NSColor(hex: "#787774")!,
+        link: NSColor(hex: "#2383e2")!,
+        codeText: NSColor(hex: "#eb5757")!,
+        codeBackground: NSColor(hex: "#f2f1ee")!,
+        quoteBar: NSColor(hex: "#37352f")!,
+        quoteText: NSColor(hex: "#4e4c47")!,
+        rule: NSColor(hex: "#e9e9e7")!,
         accent: .controlAccentColor,
-        trackFill: NSColor(white: 0, alpha: 0.06),
+        trackFill: NSColor(hex: "#37352f")!.withAlphaComponent(0.06),
+        highlight: NSColor(hex: "#fbf3db")!,
         syntax: .light
     )
 
     static let dark = Theme(
-        canvas: NSColor(white: 0.12, alpha: 1),
-        text: NSColor(white: 0.88, alpha: 1),
-        heading: NSColor(white: 0.97, alpha: 1),
-        marker: NSColor(white: 0.45, alpha: 1),
-        secondaryText: NSColor(white: 0.60, alpha: 1),
-        link: NSColor(calibratedRed: 0.45, green: 0.70, blue: 1.0, alpha: 1),
-        codeText: NSColor(calibratedRed: 0.93, green: 0.60, blue: 0.68, alpha: 1),
-        codeBackground: NSColor(white: 0.17, alpha: 1),
-        quoteBar: NSColor(white: 0.33, alpha: 1),
-        quoteText: NSColor(white: 0.66, alpha: 1),
-        rule: NSColor(white: 0.28, alpha: 1),
+        canvas: NSColor(hex: "#191919")!,
+        text: NSColor(hex: "#d4d4d2")!,
+        heading: NSColor(hex: "#ececea")!,
+        marker: NSColor(hex: "#6b6b69")!,
+        secondaryText: NSColor(hex: "#9b9b99")!,
+        link: NSColor(hex: "#529cca")!,
+        codeText: NSColor(hex: "#ef8f8a")!,
+        codeBackground: NSColor(hex: "#262626")!,
+        quoteBar: NSColor(hex: "#d4d4d2")!,
+        quoteText: NSColor(hex: "#bdbdbb")!,
+        rule: NSColor(hex: "#2f2f2f")!,
         accent: .controlAccentColor,
-        trackFill: NSColor(white: 1, alpha: 0.09),
+        trackFill: NSColor(white: 1, alpha: 0.07),
+        highlight: NSColor(hex: "#59563b")!.withAlphaComponent(0.7),
         syntax: .dark
     )
 

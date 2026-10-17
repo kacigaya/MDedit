@@ -31,7 +31,7 @@ final class FileTreeView: NSView {
         outline.addTableColumn(column)
         outline.outlineTableColumn = column
         outline.headerView = nil
-        outline.rowHeight = 22
+        outline.rowHeight = 26
         outline.style = .sourceList
         outline.backgroundColor = .clear
         outline.indentationPerLevel = 12
@@ -326,6 +326,12 @@ extension FileTreeView: NSOutlineViewDataSource, NSOutlineViewDelegate {
 
     func outlineView(_ outlineView: NSOutlineView, isItemExpandable item: Any) -> Bool {
         (item as? FileNode)?.isDirectory ?? false
+    }
+
+    func outlineView(_ outlineView: NSOutlineView, rowViewForItem item: Any) -> NSTableRowView? {
+        let row = SidebarRowView()
+        row.theme = theme
+        return row
     }
 
     func outlineView(_ outlineView: NSOutlineView, viewFor tableColumn: NSTableColumn?, item: Any) -> NSView? {
