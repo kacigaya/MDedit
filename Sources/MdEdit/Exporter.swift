@@ -321,7 +321,9 @@ enum Exporter {
         importOptions.offlineScripts = false
         importOptions.embedImages = true
         let source = options.tableOfContents ? withTableOfContents(markdown, extensions: Settings().extensions) : markdown
-        let page = renderer(baseURL: baseURL, options: importOptions).renderDocument(
+        var importRenderer = renderer(baseURL: baseURL, options: importOptions)
+        importRenderer.embeddedImagesOnly = true
+        let page = importRenderer.renderDocument(
             markdown: source,
             title: title,
             css: stylesheet(themeName: options.themeName, includeDark: false)

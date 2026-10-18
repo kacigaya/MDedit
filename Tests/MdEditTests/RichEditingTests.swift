@@ -81,6 +81,18 @@ struct RichEditingTests {
         }
     }
 
+    /// A triple-click selects a line and its newline, so the selection ends
+    /// at the start of the next line, which was revealed too.
+    @Test("Selecting a whole line reveals that line, not the one after")
+    func tripleClickRevealsOneLine() {
+        let document = Document(text: "# One\n# Two\n", theme: .light)
+        let editor = EditorViewController(textStorage: document.storage, undoManager: document.undoManager)
+        editor.textView.setSelectedRange(NSRange(location: 0, length: 6))
+        #expect(document.storage.revealedLines == 0...0)
+        editor.textView.setSelectedRange(NSRange(location: 0, length: 7))
+        #expect(document.storage.revealedLines == 0...1)
+    }
+
     /// Lines showing images that are never read, so nothing arrives but
     /// what the test posts.
     private func storageAwaitingImages(_ names: [String]) -> (MarkdownTextStorage, URL) {

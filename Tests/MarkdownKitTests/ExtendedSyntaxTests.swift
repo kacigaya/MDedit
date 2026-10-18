@@ -64,6 +64,16 @@ struct FrontMatterTests {
         #expect(structure.lines[1].kind == .frontMatter)
     }
 
+    /// Imported as rich text, a remote image was fetched while the app waited.
+    @Test("With embedded images only, a remote image becomes its alt text")
+    func embeddedImagesOnly() {
+        var renderer = HTMLRenderer()
+        renderer.embedImages = true
+        renderer.embeddedImagesOnly = true
+        #expect(renderer.render(markdown: "![a cat](https://example.com/cat.png)").contains("<p>a cat</p>"))
+        #expect(HTMLRenderer().render(markdown: "![a cat](https://example.com/cat.png)").contains("<img"))
+    }
+
     /// Quick Look renders the file as it is on disk, CRLF and all.
     @Test("Front matter with CRLF line endings is left out of export too")
     func crlfExport() {

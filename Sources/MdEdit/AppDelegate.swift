@@ -132,15 +132,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func restoreSession() {
         // Through bookmarks: a sandboxed app needs them to reach the files
         // again, and they follow files renamed since the last run.
-        let saved = (Session.load()?.windows ?? []).map { window in
-            var window = window
-            window.tabs = window.tabs.map { tab in
-                var tab = tab
-                tab.url = FileAccess.resolve(tab.url)
-                return tab
-            }
-            window.workspace = window.workspace.map { FileAccess.resolve($0) }
-            return window
+        var saved = Session.load()?.windows ?? []
+        let resolved = FileAccess.resolve(saved.flatMap { window in window.tabs.map(\.url) + (window.workspace.map { [$0] } ?? []) })
+        var next = resolved.makeIterator()
+        for index in saved.indices {
+            for tab in saved[index].tabs.indices { saved[index].tabs[tab].url = next.next() ?? saved[index].tabs[tab].url }
+            if saved[index].workspace != nil { saved[index].workspace = next.next() ?? saved[index].workspace }
         }
         let snapshots = RecoveryStore.standard.snapshots()
 

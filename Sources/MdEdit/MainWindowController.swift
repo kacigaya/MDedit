@@ -219,6 +219,15 @@ final class MainWindowController: NSWindowController {
             guard let self, let document else { return }
             handleExternalChange(of: document)
         }
+        document.onMove = { [weak self, weak document] in
+            guard let self, let document else { return }
+            if activeDocument === document {
+                window?.title = document.displayName
+                window?.representedURL = document.url
+            }
+            refreshTabs()
+            onSessionChange?()
+        }
         documents.append(document)
         if selecting { select(index: documents.count - 1) }
         refreshTabs()
@@ -1448,23 +1457,40 @@ final class MainWindowController: NSWindowController {
     }
 
     /// Puts back the file as it is on disk, as an edit that can be undone.
+    /// Puts back the file's text as an undoable edit. The file is read off
+    /// the main thread, like any other: one in iCloud or on a slow volume
+    /// froze the app until it arrived.
     @objc func revertToSaved(_ sender: Any?) {
-        guard let document = activeDocument, let url = document.url else { return NSSound.beep() }
-        do {
-            let text = try FileFormat.decode(Data(contentsOf: url)).text
-            replaceText(of: document, with: text, actionName: String(localized: "Revert to Saved"))
-        } catch {
-            show(error: error)
+        guard let document = activeDocument, document.url != nil else { return NSSound.beep() }
+        let readFile = readFile
+        let id = nextReload
+        nextReload += 1
+        reloads[id] = Task { [weak self, weak document] in
+            defer { self?.reloads[id] = nil }
+            guard let document else { return }
+            do {
+                guard let contents = try await document.readFromDisk(using: readFile),
+                      let self, documents.contains(where: { $0 === document }),
+                      replaceText(of: document, with: contents.text, actionName: String(localized: "Revert to Saved"))
+                else { return }
+                document.adoptSaved(contents)
+                refreshTabs()
+                refreshStatus()
+            } catch {
+                self?.show(error: error)
+            }
         }
     }
 
-    private func replaceText(of document: Document, with text: String, actionName: String) {
+    @discardableResult
+    private func replaceText(of document: Document, with text: String, actionName: String) -> Bool {
         let textView = editor(for: document).textView
         let all = NSRange(location: 0, length: document.storage.length)
         document.storage.unfoldAll()
-        guard textView.replaceAsUndoStep(all, with: text, actionName: actionName) else { return }
+        guard textView.replaceAsUndoStep(all, with: text, actionName: actionName) else { return false }
         textView.setSelectedRange(NSRange(location: 0, length: 0))
         textView.scrollRangeToVisible(NSRange(location: 0, length: 0))
+        return true
     }
 
     @objc func exportWord(_ sender: Any?) { exportRich(.word) }

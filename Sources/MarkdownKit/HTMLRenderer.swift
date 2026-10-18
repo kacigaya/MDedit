@@ -17,6 +17,10 @@ public struct HTMLRenderer {
     public var tableOfContents = true
     /// Reads local images into `data:` URIs, so the page stands alone.
     public var embedImages = false
+    /// Shows images that were not embedded as their alt text. For HTML
+    /// imported as rich text: WebKit fetches a remote image during the
+    /// import, holding up the app until the network answers.
+    public var embeddedImagesOnly = false
     /// What a page loads to draw math and diagrams. Nil uses the CDN.
     public var scripts: ScriptAssets?
 
@@ -579,7 +583,12 @@ public struct HTMLRenderer {
                 out += "<a href=\"\(escape(normalizeURL(resolve(destination))))\"\(titleAttribute)>\(nodesHTML(children, characters, context))</a>"
             case let .image(_, _, source, alt, title):
                 let titleAttribute = title.map { " title=\"\(escape($0))\"" } ?? ""
-                let src = (embedImages ? dataURI(forImage: source) : nil) ?? normalizeURL(resolve(source), image: true)
+                let embedded = embedImages ? dataURI(forImage: source) : nil
+                if embedded == nil, embeddedImagesOnly {
+                    out += escape(alt)
+                    break
+                }
+                let src = embedded ?? normalizeURL(resolve(source), image: true)
                 out += "<img src=\"\(escape(src))\" alt=\"\(escape(alt))\"\(titleAttribute) />"
             case let .autolink(range, markers, url):
                 // Shown as written: `www.x.dev`, or the address without `mailto:`.

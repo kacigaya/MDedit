@@ -33,9 +33,9 @@ final class ActiveLineController {
         guard let textView else { return }
         let selection = textView.selectedRange()
         let firstLine = storage.line(at: selection.location)
-        let lastLine = selection.length > 0
-            ? storage.line(at: NSMaxRange(selection))
-            : firstLine
+        // A selection ending at the start of a line, as a triple-click's
+        // does, does not reach into it: that line keeps its markdown hidden.
+        let lastLine = storage.lastLine(of: selection)
 
         // The caret never sits in a fold: moving into one opens it.
         for line in [firstLine, lastLine] where storage.isHidden(line: line) {

@@ -117,6 +117,8 @@ final class Document {
 
     /// Called when the file changes underneath us.
     var onExternalChange: (() -> Void)?
+    /// Called once the document follows its file to a new name or folder.
+    var onMove: (() -> Void)?
     private var watcher: FileWatcher?
     /// The file as last read or written here, so the watcher's news of our
     /// own save is not taken for someone else's, and a save does not write
@@ -145,7 +147,7 @@ final class Document {
     func beginWatching() {
         watcher = nil
         guard let url else { return }
-        watcher = FileWatcher(url: url) { [weak self] in
+        watcher = FileWatcher(url: url, onChange: { [weak self] in
             guard let self else { return }
             // A writer sends several events for one save; answer the last.
             pendingExternalChange?.cancel()
@@ -156,7 +158,25 @@ final class Document {
             }
             pendingExternalChange = change
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.15, execute: change)
-        }
+        }, onMove: { [weak self] newURL in
+            self?.follow(to: newURL)
+        })
+    }
+
+    /// Takes the file's new name or folder for its own. A tab left on the
+    /// old path showed the file as missing, and saving wrote a second copy
+    /// there. Moved to the Trash, it stays missing: it is as good as gone.
+    private func follow(to newURL: URL) {
+        guard !Self.isInTrash(newURL) else { return }
+        url = newURL
+        isMissingOnDisk = false
+        FileAccess.remember(newURL)
+        beginWatching()
+        onMove?()
+    }
+
+    private static func isInTrash(_ url: URL) -> Bool {
+        url.standardizedFileURL.pathComponents.contains { $0 == ".Trash" || $0 == ".Trashes" }
     }
 
     private var pendingExternalChange: DispatchWorkItem?
@@ -191,6 +211,34 @@ final class Document {
         self.format = format
         isMissingOnDisk = false
         return true
+    }
+
+    /// The file as it is on disk now, read away from the main thread, and
+    /// what it looked like as it was read.
+    struct DiskContents {
+        var text: String
+        var format: FileFormat
+        var stamp: FileStamp?
+    }
+
+    func readFromDisk(
+        using load: @escaping @Sendable (URL) throws -> Data = { try Data(contentsOf: $0) }
+    ) async throws -> DiskContents? {
+        guard let url else { return nil }
+        let stamp = FileStamp(of: url.resolvingSymlinksInPath())
+        let (text, format) = try await FileFormat.read(url, using: load)
+        guard self.url == url else { return nil }
+        return DiskContents(text: text, format: format, stamp: stamp)
+    }
+
+    /// Takes contents just read for what is saved, once the editor shows
+    /// them: Revert to Saved left the old saved text in place, so a file
+    /// changed on disk since showed as edited the moment it was reverted to.
+    func adoptSaved(_ contents: DiskContents) {
+        savedText = contents.text
+        format = contents.format
+        diskStamp = contents.stamp
+        isMissingOnDisk = false
     }
 
     /// Identifies the text last read from or written to disk, for telling

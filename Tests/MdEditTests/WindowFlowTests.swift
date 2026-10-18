@@ -353,6 +353,33 @@ struct WindowFlowTests {
         #expect(try String(contentsOf: url, encoding: .utf8) == "theirs\n")
     }
 
+    /// Revert to Saved read the file on the main thread, and left the old
+    /// saved text in place, so a file changed on disk since showed as
+    /// edited right after it was reverted to.
+    @Test("Revert to Saved reads the file off the main thread and leaves the tab saved")
+    func revertToSaved() async throws {
+        let controller = makeWindow()
+        let document = try await openEdited("revert.md", in: controller)
+        let url = try #require(document.url)
+        try "theirs\n".write(to: url, atomically: true, encoding: .utf8)
+        let gate = SlowGate()
+        controller.readFile = { url in
+            gate.pass()
+            return try Data(contentsOf: url)
+        }
+        controller.revertToSaved(nil)
+        try await gate.waitForReads()
+        gate.open()
+        await controller.finishReading()
+        #expect(document.text == "theirs\n")
+        #expect(!document.isDirty)
+        #expect(!gate.ranOnMainThread)
+        // Undoable, and undone it is unsaved again.
+        document.undoManager.undo()
+        #expect(document.text == "edited saved\n")
+        #expect(document.isDirty)
+    }
+
     /// Every keystroke put the snapshot off again, so steady typing was
     /// never snapshotted and a crash lost all of it.
     @Test("Steady typing is still snapshotted, after the longest wait")

@@ -371,6 +371,36 @@ struct FileOnDiskTests {
         }
         #expect(changes == 1)
     }
+    /// A file renamed or moved in Finder left its tab on the old path,
+    /// marked missing, and saving wrote a second copy there.
+    @Test("A file renamed on disk takes its tab along; one replaced at its path does not")
+    func followsRename() async throws {
+        let folder = try folder()
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let url = folder.appendingPathComponent("before.md")
+        try "one\n".write(to: url, atomically: false, encoding: .utf8)
+        let document = try await Document.open(contentsOf: url, theme: .light)
+        var moves = 0
+        document.onMove = { moves += 1 }
+
+        let renamed = folder.appendingPathComponent("after.md")
+        try FileManager.default.moveItem(at: url, to: renamed)
+        for _ in 0..<40 where document.url?.standardizedFileURL != renamed.standardizedFileURL {
+            try await Task.sleep(for: .milliseconds(100))
+        }
+        #expect(document.url?.standardizedFileURL.path == renamed.standardizedFileURL.path)
+        #expect(moves == 1)
+        #expect(!document.isDirty)
+
+        // Renamed to a backup with a new file written at the path, as some
+        // editors save: the tab stays with the path.
+        try FileManager.default.moveItem(at: renamed, to: folder.appendingPathComponent("after.md~"))
+        try "two\n".write(to: renamed, atomically: false, encoding: .utf8)
+        try await Task.sleep(for: .milliseconds(2_600))
+        #expect(document.url?.standardizedFileURL.path == renamed.standardizedFileURL.path)
+        #expect(moves == 1)
+    }
+
     /// Saving never looked at the file first, so whatever another app had
     /// written to it since it was read was replaced without a word.
     @Test("Saving over a change made on disk since the file was read writes nothing, unless told to")

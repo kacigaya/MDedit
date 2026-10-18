@@ -18,7 +18,11 @@ enum FileAccess {
     }
 
     private static var options: (create: URL.BookmarkCreationOptions, resolve: URL.BookmarkResolutionOptions) {
-        isSandboxed ? (.withSecurityScope, [.withSecurityScope, .withoutUI]) : ([], .withoutUI)
+        // Without mounting: a bookmark to a server or disk no longer there
+        // tried to mount it, holding up launch until that gave up.
+        isSandboxed
+            ? (.withSecurityScope, [.withSecurityScope, .withoutUI, .withoutMounting])
+            : ([], [.withoutUI, .withoutMounting])
     }
 
     /// Records a bookmark for a file or folder the app can reach right now.
@@ -50,15 +54,29 @@ enum FileAccess {
     /// Where a remembered file is now, with access to it started. A file
     /// with no bookmark, or one that no longer resolves, comes back as given.
     static func resolve(_ url: URL, in defaults: UserDefaults = .standard) -> URL {
-        let path = url.standardizedFileURL.path
-        guard let entry = load(from: defaults).last(where: { $0.path == path }) else { return url }
-        var isStale = false
-        guard let resolved = try? URL(resolvingBookmarkData: entry.data, options: options.resolve, bookmarkDataIsStale: &isStale) else {
-            return url
+        resolve([url], in: defaults)[0]
+    }
+
+    /// Several at once, as a session's tabs are: each one read and decoded
+    /// the whole list of bookmarks again.
+    static func resolve(_ urls: [URL], in defaults: UserDefaults = .standard) -> [URL] {
+        guard !urls.isEmpty else { return [] }
+        var byPath: [String: Data] = [:]
+        for entry in load(from: defaults) { byPath[entry.path] = entry.data }
+        var moved: [URL] = []
+        let resolved = urls.map { url -> URL in
+            let path = url.standardizedFileURL.path
+            guard let data = byPath[path] else { return url }
+            var isStale = false
+            guard let resolved = try? URL(resolvingBookmarkData: data, options: options.resolve, bookmarkDataIsStale: &isStale) else {
+                return url
+            }
+            // Held for the rest of the run: the tab or folder stays open.
+            if isSandboxed { _ = resolved.startAccessingSecurityScopedResource() }
+            if isStale || resolved.standardizedFileURL.path != path { moved.append(resolved) }
+            return resolved
         }
-        // Held for the rest of the run: the tab or folder stays open.
-        if isSandboxed { _ = resolved.startAccessingSecurityScopedResource() }
-        if isStale || resolved.standardizedFileURL.path != path { remember(resolved, in: defaults) }
+        for url in moved { remember(url, in: defaults) }
         return resolved
     }
 

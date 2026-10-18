@@ -31,6 +31,28 @@ struct DistributionTests {
         #expect(FileAccess.resolve(other, in: defaults) == other)
     }
 
+    @Test("A session's files resolve together, in order, renamed ones found again")
+    func bookmarksResolveTogether() throws {
+        let defaults = scratchDefaults()
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("MdEditBookmarks-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: folder) }
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let files = try (0..<3).map { index -> URL in
+            let url = folder.appendingPathComponent("f\(index).md")
+            try "text".write(to: url, atomically: true, encoding: .utf8)
+            FileAccess.remember(url, in: defaults)
+            return url
+        }
+        let renamed = folder.appendingPathComponent("moved.md")
+        try FileManager.default.moveItem(at: files[1], to: renamed)
+        let unknown = folder.appendingPathComponent("never.md")
+
+        let resolved = FileAccess.resolve(files + [unknown], in: defaults).map(\.standardizedFileURL.path)
+        #expect(resolved == [files[0], renamed, files[2], unknown].map(\.standardizedFileURL.path))
+        // The move is remembered under the new path.
+        #expect(FileAccess.resolve(renamed, in: defaults).standardizedFileURL.path == renamed.standardizedFileURL.path)
+    }
+
     @Test("The bookmark list keeps only the newest")
     func bookmarkLimit() throws {
         let defaults = scratchDefaults()

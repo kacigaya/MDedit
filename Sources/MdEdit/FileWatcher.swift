@@ -11,10 +11,16 @@ final class FileWatcher: @unchecked Sendable {
     private var descriptor: CInt = -1
     private let url: URL
     private let onChange: @MainActor () -> Void
+    /// Told where the file went when it was renamed or moved, and nothing
+    /// took its place at the old path.
+    private let onMove: (@MainActor (URL) -> Void)?
+    /// Where the file was renamed to, until something appears at its path.
+    private var movedTo: URL?
 
-    init?(url: URL, onChange: @escaping @MainActor () -> Void) {
+    init?(url: URL, onChange: @escaping @MainActor () -> Void, onMove: (@MainActor (URL) -> Void)? = nil) {
         self.url = url
         self.onChange = onChange
+        self.onMove = onMove
         guard start() else { return nil }
     }
 
@@ -37,6 +43,9 @@ final class FileWatcher: @unchecked Sendable {
             MainActor.assumeIsolated {
                 guard let self else { return }
                 let events = source.data
+                // Asked before the watch is dropped: the descriptor follows
+                // the file wherever it went.
+                if events.contains(.rename) { self.movedTo = self.currentLocation() }
                 self.onChange()
                 if events.contains(.delete) || events.contains(.rename) {
                     // The file was replaced; follow it to the new inode.
@@ -66,12 +75,27 @@ final class FileWatcher: @unchecked Sendable {
                 if self.start() {
                     // Back, perhaps after the change was looked at and the
                     // file found missing: what it holds now is news too.
+                    self.movedTo = nil
                     self.onChange()
                 } else if attempt + 1 < Self.retries {
                     self.restart(attempt: attempt + 1)
+                } else if let movedTo = self.movedTo, FileManager.default.fileExists(atPath: movedTo.path) {
+                    // Nothing came back at the old path: the file was moved
+                    // or renamed, not replaced, so the tab goes with it.
+                    self.movedTo = nil
+                    self.onMove?(movedTo)
                 }
             }
         }
+    }
+
+    /// The path the watched file has now.
+    private func currentLocation() -> URL? {
+        guard descriptor >= 0 else { return nil }
+        var buffer = [CChar](repeating: 0, count: Int(MAXPATHLEN))
+        guard fcntl(descriptor, F_GETPATH, &buffer) != -1 else { return nil }
+        let path = String(cString: buffer)
+        return path.isEmpty ? nil : URL(fileURLWithPath: path)
     }
 
     private static let retryDelay = 0.1
