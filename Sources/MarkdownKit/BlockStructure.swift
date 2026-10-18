@@ -17,7 +17,8 @@ public final class BlockStructure {
         index = LineIndex(text: text)
         lines = []
         lines.reserveCapacity(index.count)
-        var carry = CarryState.start(extensions: extensions)
+        hasFrontMatter = Self.opensFrontMatter(text, index: index)
+        var carry = startCarry()
         for line in 0..<index.count {
             let info = BlockParser.parse(line: Self.characters(of: text, index: index, line: line), carry: carry)
             lines.append(info)
@@ -26,6 +27,34 @@ public final class BlockStructure {
     }
 
     public var lineCount: Int { index.count }
+
+    /// Whether the document opens with front matter that reads as YAML.
+    /// Without looking ahead, any document starting with `---` had its
+    /// first lines shown as front matter, while export showed a rule and
+    /// the text below it.
+    public private(set) var hasFrontMatter = false
+
+    /// Front matter longer than this is taken for ordinary text: deciding
+    /// looks at every line of it, on every edit.
+    static let frontMatterLookahead = 1_000
+
+    static func opensFrontMatter(_ text: NSString, index: LineIndex) -> Bool {
+        guard index.count > 1, isFrontMatterOpening(characters(of: text, index: index, line: 0)) else { return false }
+        var hasContent = false
+        for line in 1..<min(index.count, frontMatterLookahead) {
+            let characters = characters(of: text, index: index, line: line)
+            if isFrontMatterClosing(characters) { return hasContent }
+            guard isYAMLFrontMatterLine(String(decoding: characters, as: UTF16.self)) else { return false }
+            if !isBlank(characters, from: 0) { hasContent = true }
+        }
+        return false
+    }
+
+    private func startCarry() -> CarryState {
+        var carry = CarryState.start(extensions: extensions)
+        carry.opensFrontMatter = hasFrontMatter
+        return carry
+    }
 
     /// Whether the last update added, removed or changed a link or footnote
     /// definition, so references need collecting again.
@@ -48,7 +77,14 @@ public final class BlockStructure {
         let touched = index.update(editedRange: editedRange, changeInLength: changeDelta, text: text)
         let lineDelta = index.count - oldLineCount
 
-        let first = touched.lowerBound
+        var first = touched.lowerBound
+        // An edit anywhere in the first lines can make them front matter or
+        // stop them being it: then they all parse again.
+        let opens = Self.opensFrontMatter(text, index: index)
+        if opens != hasFrontMatter {
+            hasFrontMatter = opens
+            first = 0
+        }
         let lastTouched = touched.upperBound
 
         // Only the reparsed run is rebuilt; lines either side stay in place.
@@ -60,7 +96,7 @@ public final class BlockStructure {
         }
 
         var carry = if first == 0 {
-            CarryState.start(extensions: extensions)
+            startCarry()
         } else if first - 1 < prefix {
             lines[first - 1].state
         } else {
@@ -109,7 +145,8 @@ public final class BlockStructure {
         index = LineIndex(text: text)
         lines = []
         lines.reserveCapacity(index.count)
-        var carry = CarryState.start(extensions: extensions)
+        hasFrontMatter = Self.opensFrontMatter(text, index: index)
+        var carry = startCarry()
         for line in 0..<index.count {
             let info = BlockParser.parse(line: Self.characters(of: text, index: index, line: line), carry: carry)
             lines.append(info)

@@ -111,6 +111,9 @@ public struct CarryState: Equatable, Sendable {
     public var inTable: Bool
     /// Only the first line can open front matter.
     public var atDocumentStart: Bool
+    /// Whether the document's first lines read as YAML front matter, so a
+    /// `---` first line opens it; decided by looking ahead, as export does.
+    public var opensFrontMatter = false
     public var inFrontMatter: Bool
     /// The open HTML block and what will close it.
     public var htmlBlock: HTMLBlockEnd?
@@ -165,9 +168,11 @@ public enum BlockParser {
         var markers: [Marker] = []
         var cursor = 0
         state.atDocumentStart = false
+        state.opensFrontMatter = false
 
-        // 0. Front matter: `---` on the very first line, until `---` or `...`.
-        if carry.inFrontMatter || (carry.atDocumentStart && isFrontMatterOpening(line)) {
+        // 0. Front matter: `---` on the very first line, until `---` or `...`,
+        // when what is between reads as YAML.
+        if carry.inFrontMatter || (carry.atDocumentStart && carry.opensFrontMatter && isFrontMatterOpening(line)) {
             let isDelimiter = !carry.inFrontMatter || isFrontMatterClosing(line)
             if isDelimiter {
                 markers.append(Marker(range: NSRange(location: 0, length: line.count), kind: .fence))
@@ -187,7 +192,7 @@ public enum BlockParser {
         // 1. Blockquote prefixes come off first; they nest around everything.
         var quoteDepth = 0
         while true {
-            let afterSpaces = skipSpaces(line, from: cursor, limit: 3)
+            let afterSpaces = skipIndent(line, from: cursor, columns: 3)
             guard afterSpaces < line.count, line[afterSpaces] == UInt16(ascii: ">") else { break }
             var end = afterSpaces + 1
             if end < line.count, line[end] == UInt16(ascii: " ") { end += 1 }
@@ -198,7 +203,7 @@ public enum BlockParser {
 
         // 2. Inside a fence, only a matching closing fence ends it.
         if let fence = state.fence {
-            let indentStart = skipSpaces(line, from: cursor, limit: 3)
+            let indentStart = skipIndent(line, from: cursor, columns: 3)
             if let run = delimiterRun(line, at: indentStart, character: fence.character),
                run.count >= fence.count,
                isBlank(line, from: run.end) {
@@ -268,7 +273,7 @@ public enum BlockParser {
 
         // 2c. Inside a math block, lines are TeX until a `$$` line closes it.
         if state.inMathBlock {
-            let start = skipSpaces(line, from: cursor, limit: 3)
+            let start = skipIndent(line, from: cursor, columns: 3)
             let closes = isMathFence(line, from: start)
             if closes {
                 markers.append(Marker(range: NSRange(location: cursor, length: line.count - cursor), kind: .fence))
@@ -404,9 +409,9 @@ public enum BlockParser {
         // 5b. An HTML block.
         if indent < codeIndentBase + 4,
            let end = htmlBlockStart(line, from: bodyStart, afterParagraph: state.previousWasParagraph) {
-            // `<!-- note -->` opens and closes on the same line.
-            let opener = min(line.count, bodyStart + 2)
-            state.htmlBlock = htmlBlockEnds(end, on: line, from: opener) ? nil : end
+            // `<!-- note -->` opens and closes on the same line, and so does
+            // `<?>`: its end is looked for from its start, as export does.
+            state.htmlBlock = htmlBlockEnds(end, on: line, from: bodyStart) ? nil : end
             state.previousWasParagraph = false
             state.previousWasBlank = false
             state.inTable = false
@@ -533,7 +538,9 @@ public enum BlockParser {
                 state: state
             )
         }
-        if state.inTable, contains(line, from: bodyStart, character: UInt16(ascii: "|")) {
+        // Any line that starts no other block continues a table, pipes or
+        // not, as in GFM and export.
+        if state.inTable {
             state.previousWasParagraph = false
             state.previousWasBlank = false
             return LineInfo(

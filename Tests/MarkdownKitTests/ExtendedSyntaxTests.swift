@@ -31,6 +31,44 @@ struct FrontMatterTests {
     func export() {
         #expect(html("---\ntitle: x\n---\n# Hi") == "<h1 id=\"hi\">Hi</h1>")
     }
+
+    /// The editor took any `---` first line for front matter, while export
+    /// showed a rule and the text below it unless that text read as YAML.
+    @Test("A `---` first line opens front matter only when what follows reads as YAML")
+    func onlyYAML() {
+        #expect(kinds("---\n# Title\nSome *text*\n\n---\n\nmore") == [
+            .thematicBreak, .atxHeading(level: 1), .paragraph, .blank, .thematicBreak, .blank, .paragraph,
+        ])
+        // Unclosed, it is not front matter either.
+        #expect(kinds("---\ntitle: x")[0] == .thematicBreak)
+    }
+
+    @Test("Edits that make or unmake front matter reparse the lines it covers")
+    func editsFlipFrontMatter() {
+        var text = "---\ntitle: x\n---\nbody"
+        let structure = BlockStructure(text: text as NSString)
+        #expect(structure.lines[1].kind == .frontMatter)
+        func replace(_ target: String, with replacement: String) {
+            let range = (text as NSString).range(of: target)
+            text = (text as NSString).replacingCharacters(in: range, with: replacement)
+            let changed = structure.update(
+                text: text as NSString, editedRange: NSRange(location: range.location, length: replacement.utf16.count),
+                changeInLength: replacement.utf16.count - range.length
+            )
+            #expect(changed.lowerBound == 0)
+            #expect(structure.lines == BlockStructure(text: text as NSString).lines)
+        }
+        replace("title: x", with: "title x")
+        #expect(structure.lines[1].kind != .frontMatter)
+        replace("title x", with: "title: x")
+        #expect(structure.lines[1].kind == .frontMatter)
+    }
+
+    /// Quick Look renders the file as it is on disk, CRLF and all.
+    @Test("Front matter with CRLF line endings is left out of export too")
+    func crlfExport() {
+        #expect(html("---\r\ntitle: x\r\n---\r\n# Hi") == "<h1 id=\"hi\">Hi</h1>")
+    }
 }
 
 @Suite("HTML blocks")
@@ -45,6 +83,8 @@ struct HTMLBlockTests {
     func terminated() {
         #expect(kinds("<!--\n\nhidden\n-->\nafter") == [.htmlBlock, .htmlBlock, .htmlBlock, .htmlBlock, .paragraph])
         #expect(kinds("<!-- one line -->\nafter") == [.htmlBlock, .paragraph])
+        // Its own end is in `<?>`: the block is that line alone, as in export.
+        #expect(kinds("<?>\n\n# Heading") == [.htmlBlock, .blank, .atxHeading(level: 1)])
         #expect(kinds("<script>\n\nlet a\n</script>\nx") == [.htmlBlock, .htmlBlock, .htmlBlock, .htmlBlock, .paragraph])
     }
 

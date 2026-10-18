@@ -83,6 +83,12 @@ public struct HTMLRenderer {
     /// as YAML. Otherwise `---` is a rule or a setext underline, as usual.
     private func stripFrontMatter(_ markdown: String) -> String {
         guard markdown.hasPrefix("---") else { return markdown }
+        // Quick Look hands over the file as it is; CRLF lines would not
+        // match `---` once split on `\n`.
+        // (`contains("\r")` would miss them: `\r\n` is one Character.)
+        let markdown = markdown.utf16.contains(13)
+            ? markdown.replacingOccurrences(of: "\r\n", with: "\n").replacingOccurrences(of: "\r", with: "\n")
+            : markdown
         var lines = markdown.components(separatedBy: "\n")
         guard lines.first?.trimmingCharacters(in: .whitespaces) == "---" else { return markdown }
         for index in lines.indices.dropFirst() {
@@ -90,22 +96,12 @@ public struct HTMLRenderer {
             guard line == "---" || line == "..." else { continue }
             let body = lines[1..<index]
             guard body.contains(where: { !$0.trimmingCharacters(in: .whitespaces).isEmpty }),
-                  body.allSatisfy(isYAMLLine)
+                  body.allSatisfy(isYAMLFrontMatterLine)
             else { return markdown }
             lines.removeSubrange(0...index)
             return lines.joined(separator: "\n")
         }
         return markdown
-    }
-
-    /// `key: value`, `- item`, a comment, an indented continuation, or blank.
-    private func isYAMLLine(_ line: String) -> Bool {
-        let trimmed = line.trimmingCharacters(in: .whitespaces)
-        if trimmed.isEmpty || trimmed.hasPrefix("#") || trimmed.hasPrefix("- ") || trimmed == "-" { return true }
-        if line.first == " " || line.first == "\t" { return true }
-        guard let colon = trimmed.firstIndex(of: ":") else { return false }
-        let key = trimmed[..<colon]
-        return !key.isEmpty && !key.contains(" ") || key.hasPrefix("\"") || key.hasPrefix("'")
     }
 
     // MARK: - Context

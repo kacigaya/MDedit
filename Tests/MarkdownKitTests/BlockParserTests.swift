@@ -37,6 +37,29 @@ struct BlockParserTests {
         if case .tableDelimiter? = single.info(forLine: 1)?.kind {} else { Issue.record("one-cell table") }
     }
 
+    /// A tab counted as one space of the three a closing fence may be
+    /// indented by, so a tab-indented fence line inside a code block closed
+    /// it in the editor, and the real closing fence opened another that ran
+    /// to the end of the document.
+    @Test("A tab is four columns of indent before a closing fence, `>` or `$$`")
+    func tabIndent() {
+        #expect(kinds("```\ncode\n\t```\nstill code\n```\nafter") == [
+            .fenceStart(language: ""), .codeLine, .codeLine, .codeLine, .fenceEnd, .paragraph,
+        ])
+        #expect(kinds("\t> quote") == [.indentedCode])
+        #expect(kinds("  \t> quote") == [.indentedCode])
+        #expect(parseAll("   > quote")[0].quoteDepth == 1)
+        #expect(kinds("$$\nx\n\t$$\n$$") == [.mathDelimiter, .mathLine, .mathLine, .mathDelimiter])
+    }
+
+    /// The editor ended a table at the first row without a pipe; GFM and
+    /// export carry on until a blank line.
+    @Test("A table goes on through rows without pipes, to a blank line")
+    func pipelessRows() {
+        #expect(kinds("|a|b|\n|-|-|\nfoo\n\nafter")[2] == .tableRow)
+        #expect(kinds("|a|b|\n|-|-|\nfoo\n\nafter")[4] == .paragraph)
+    }
+
     @Test("ATX headings")
     func headings() {
         #expect(kinds("# one") == [.atxHeading(level: 1)])
@@ -150,6 +173,7 @@ struct BlockStructureTests {
         let fragments = [
             "`", "```", "\n", "# ", "- ", "> ", "x", "**", "\n\n", "", "|", "---",
             "<div>", "<!--", "-->", "[a]: /u", "[^n]: ", "==", "...", "$$", "$",
+            "\t", "title: ", ": ",
         ]
 
         for iteration in 0..<300 {

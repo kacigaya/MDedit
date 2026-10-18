@@ -91,11 +91,7 @@ public enum SyntaxHighlighter {
                 continue
             }
 
-            if matchesLineComment(line, at: cursor, language: language) {
-                tokens.append(Token(range: NSRange(location: cursor, length: line.count - cursor), kind: .comment))
-                return tokens
-            }
-
+            // Block comments first: Lua's `--[[` starts with its line comment's `--`.
             if let block = language.blockComment, matches(line, at: cursor, text: block.open) {
                 let end = scanUntil(line, from: cursor + block.open.utf16.count, marker: block.close)
                 tokens.append(Token(range: NSRange(location: cursor, length: end.index - cursor), kind: .comment))
@@ -105,6 +101,11 @@ public enum SyntaxHighlighter {
                 }
                 cursor = end.index
                 continue
+            }
+
+            if matchesLineComment(line, at: cursor, language: language) {
+                tokens.append(Token(range: NSRange(location: cursor, length: line.count - cursor), kind: .comment))
+                return tokens
             }
 
             if language.markupTags, character == UInt16(ascii: "<") {

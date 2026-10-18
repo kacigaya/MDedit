@@ -29,15 +29,46 @@ func skipSpaces(_ line: [UInt16], from index: Int, limit: Int) -> Int {
     return cursor
 }
 
-/// Indentation width from `index`, counting a tab as four columns.
-func indentWidth(_ line: [UInt16], from index: Int) -> Int {
-    var width = 0
+/// The column after `column` that `character` reaches: a tab goes to the
+/// next multiple of four.
+private func column(after character: UInt16, at column: Int) -> Int {
+    character == Scan.tab ? column + 4 - column % 4 : column + 1
+}
+
+/// The column `index` is at, counting tab stops.
+func column(_ line: [UInt16], at index: Int) -> Int {
+    var result = 0
+    for cursor in 0..<min(index, line.count) { result = column(after: line[cursor], at: result) }
+    return result
+}
+
+/// Advances past at most `columns` columns of indentation, by tab stops as
+/// the export parser counts them. A tab that would reach past them is not
+/// skipped: a tab before `>` or a closing fence is four columns, not one,
+/// so the line is not a quote, or does not close the fence.
+func skipIndent(_ line: [UInt16], from index: Int, columns limit: Int) -> Int {
+    let start = column(line, at: index)
+    var current = start
     var cursor = index
     while cursor < line.count, isSpaceOrTab(line[cursor]) {
-        width += line[cursor] == Scan.tab ? 4 : 1
+        let next = column(after: line[cursor], at: current)
+        if next - start > limit { break }
+        current = next
         cursor += 1
     }
-    return width
+    return cursor
+}
+
+/// Indentation width from `index`, in columns, counting tab stops.
+func indentWidth(_ line: [UInt16], from index: Int) -> Int {
+    let start = column(line, at: index)
+    var current = start
+    var cursor = index
+    while cursor < line.count, isSpaceOrTab(line[cursor]) {
+        current = column(after: line[cursor], at: current)
+        cursor += 1
+    }
+    return current - start
 }
 
 func isBlank(_ line: [UInt16], from index: Int) -> Bool {

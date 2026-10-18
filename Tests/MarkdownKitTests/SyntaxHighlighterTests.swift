@@ -69,6 +69,13 @@ struct SyntaxHighlighterTests {
         ])
     }
 
+    /// `--` matched first, so `--[[` was a line comment and the lines after
+    /// it were coloured as code.
+    @Test("Lua block comments run across lines")
+    func luaBlockComment() {
+        #expect(highlight("--[[ start\nstill\n]] x = 1", "lua").prefix(2) == ["comment:--[[ start", "comment:still"])
+    }
+
     @Test("C preprocessor and block comments spanning lines")
     func c() {
         #expect(highlight("#include <stdio.h>", "c") == ["keyword:#include"])

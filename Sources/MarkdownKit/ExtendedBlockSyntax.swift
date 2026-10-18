@@ -17,6 +17,18 @@ func isFrontMatterClosing(_ line: [UInt16]) -> Bool {
     return isBlank(line, from: 3)
 }
 
+/// Whether a line of front matter reads as YAML: `key: value`, `- item`,
+/// a comment, an indented continuation, or blank. A first `---` line is
+/// front matter only when every line up to the closing one does.
+func isYAMLFrontMatterLine(_ line: String) -> Bool {
+    let trimmed = line.trimmingCharacters(in: .whitespaces)
+    if trimmed.isEmpty || trimmed.hasPrefix("#") || trimmed.hasPrefix("- ") || trimmed == "-" { return true }
+    if line.first == " " || line.first == "\t" { return true }
+    guard let colon = trimmed.firstIndex(of: ":") else { return false }
+    let key = trimmed[..<colon]
+    return !key.isEmpty && !key.contains(" ") || key.hasPrefix("\"") || key.hasPrefix("'")
+}
+
 /// `$$` alone on a line (spaces aside) opens or closes display math.
 func isMathFence(_ line: [UInt16], from index: Int) -> Bool {
     guard index + 1 < line.count, line[index] == UInt16(ascii: "$"), line[index + 1] == UInt16(ascii: "$") else { return false }
