@@ -12,6 +12,57 @@ struct MarkdownTextStorageTests {
         return storage
     }
 
+    /// Restyles of far-apart lines were reported as one edit, merged from
+    /// the first to the last, so a caret jumping from the top of a long
+    /// document to its bottom had every line between refixed and laid out.
+    @Test("Revealing a far-off line reprocesses only the lines that change")
+    func farRevealStaysLocal() {
+        let storage = storage(String(repeating: "Some *text* here.\n\n", count: 2000))
+        storage.revealedLines = 0...0
+        final class Processed: NSObject, NSTextStorageDelegate {
+            var ranges: [NSRange] = []
+            func textStorage(
+                _ textStorage: NSTextStorage, didProcessEditing editedMask: NSTextStorageEditActions,
+                range editedRange: NSRange, changeInLength delta: Int
+            ) {
+                ranges.append(editedRange)
+            }
+        }
+        let processed = Processed()
+        storage.delegate = processed
+
+        storage.revealedLines = (storage.structure.lineCount - 2)...(storage.structure.lineCount - 2)
+        #expect(!processed.ranges.isEmpty)
+        #expect(processed.ranges.allSatisfy { $0.length < 200 })
+    }
+
+    /// Styling resets each line's font, taking emoji and CJK off the
+    /// fallback fonts that draw them; only the typed character got its
+    /// fallback back, so the rest of the line went blank as you typed.
+    @Test("Typing on a line keeps its emoji and CJK drawable, and the line above's too")
+    func fallbackFontsSurviveTyping() {
+        let storage = storage("Hello 😀 日本\nnext 🎉 中文\n")
+        func drawable(_ location: Int) -> Bool {
+            let font = storage.attribute(.font, at: location, effectiveRange: nil) as! NSFont
+            let range = storage.text.rangeOfComposedCharacterSequence(at: location)
+            var characters = Array(repeating: UniChar(0), count: range.length)
+            storage.text.getCharacters(&characters, range: range)
+            var glyphs = Array(repeating: CGGlyph(0), count: range.length)
+            return CTFontGetGlyphsForCharacters(font, characters, &glyphs, range.length)
+        }
+        let emoji = storage.text.range(of: "😀").location
+        let kanji = storage.text.range(of: "日").location
+        #expect(drawable(emoji) && drawable(kanji))
+
+        // At the end of the first line, then at the start of the second.
+        storage.replaceCharacters(in: NSRange(location: storage.text.range(of: "\n").location, length: 0), with: "!")
+        #expect(drawable(emoji))
+        #expect(drawable(kanji))
+        storage.replaceCharacters(in: NSRange(location: storage.text.range(of: "next").location, length: 0), with: "x")
+        #expect(drawable(emoji) && drawable(kanji))
+        #expect(drawable(storage.text.range(of: "🎉").location) && drawable(storage.text.range(of: "中").location))
+    }
+
     /// The crash this test exists for: type a line, press Return, press
     /// Backspace. The caret's revealed line is then one past the end of a
     /// document that just shrank, and forming that range traps.

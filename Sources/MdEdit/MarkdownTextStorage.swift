@@ -323,6 +323,7 @@ final class MarkdownTextStorage: MDBackedTextStorage {
             structure = BlockStructure(text: self.text)
             references = .collect(from: structure, requireDefinitions: false)
             applyStyles(lineRange: 0...max(0, structure.lineCount - 1))
+            fixAttributes(in: NSRange(location: 0, length: backing.length))
         }
     }
 
@@ -401,15 +402,19 @@ final class MarkdownTextStorage: MDBackedTextStorage {
     }
 
     private func restyle(lines: IndexSet) {
-        let touched = lines.rangeView.compactMap { clampedLineRange($0.lowerBound...($0.upperBound - 1)) }.map(expandedToTypesetBlocks)
-        guard !touched.isEmpty else { return }
-        beginEditing()
-        for range in touched {
+        restyle(ranges: lines.rangeView.compactMap { clampedLineRange($0.lowerBound...($0.upperBound - 1)) }.map(expandedToTypesetBlocks))
+    }
+
+    /// Restyles each range as an edit of its own. Edits reported together
+    /// are merged into one range from the first to the last, so a caret
+    /// jumping from the top of a long document to the bottom had every line
+    /// between refixed and laid out again: seconds, for two lines.
+    private func restyle(ranges: [ClosedRange<Int>]) {
+        for range in ranges {
+            beginEditing()
             applyStyles(lineRange: range)
             edited(.editedAttributes, range: characterRange(forLines: range), changeInLength: 0)
-        }
-        endEditing()
-        for range in touched {
+            endEditing()
             pendingInvalidation = characterRange(forLines: range)
             flushPendingInvalidation()
         }
@@ -518,7 +523,21 @@ final class MarkdownTextStorage: MDBackedTextStorage {
             // A formula or diagram is one image: editing a line of it redraws it all.
             lineRange = expandedToDefinitionGaps(expandedToTypesetBlocks(lineRange))
             applyStyles(lineRange: lineRange)
-            pendingInvalidation = characterRange(forLines: lineRange)
+            let restyled = characterRange(forLines: lineRange)
+            // Styling sets each line's font afresh, taking emoji and CJK off
+            // the fallback fonts that draw them; AppKit puts those back only
+            // in the edited range, so the rest of these lines would show
+            // nothing where they were.
+            let edited = editedRange
+            let before = min(edited.location, NSMaxRange(restyled))
+            if before > restyled.location {
+                fixAttributes(in: NSRange(location: restyled.location, length: before - restyled.location))
+            }
+            if NSMaxRange(restyled) > NSMaxRange(edited) {
+                let after = max(NSMaxRange(edited), restyled.location)
+                fixAttributes(in: NSRange(location: after, length: NSMaxRange(restyled) - after))
+            }
+            pendingInvalidation = restyled
         }
         super.processEditing()
         isProcessingEdit = false
@@ -604,20 +623,7 @@ final class MarkdownTextStorage: MDBackedTextStorage {
         }
         let changed = lines(old).symmetricDifference(lines(new))
         // A block that shows as an image opens and closes as a whole.
-        let touched = changed.rangeView.map { self.expandedToDefinitionGaps(self.expandedToTypesetBlocks($0.lowerBound...($0.upperBound - 1))) }
-        guard !touched.isEmpty else { return }
-
-        beginEditing()
-        for range in touched {
-            applyStyles(lineRange: range)
-            edited(.editedAttributes, range: characterRange(forLines: range), changeInLength: 0)
-        }
-        endEditing()
-
-        for range in touched {
-            pendingInvalidation = characterRange(forLines: range)
-            flushPendingInvalidation()
-        }
+        restyle(ranges: changed.rangeView.map { self.expandedToDefinitionGaps(self.expandedToTypesetBlocks($0.lowerBound...($0.upperBound - 1))) })
     }
 
     private func applyStyles(lineRange: ClosedRange<Int>) {

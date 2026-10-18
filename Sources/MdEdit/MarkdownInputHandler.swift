@@ -144,14 +144,19 @@ struct MarkdownInputHandler {
 
         var replacement = lines.joined(separator: "\n")
         if hadTrailingNewline { replacement += "\n" }
-        guard replacement != text.substring(with: range) else { return true }
+        let original = text.substring(with: range)
+        guard replacement != original else { return true }
+        // How far the first line moved, and the whole text: a selection
+        // keeping its old length lost a line's worth per indent, so the
+        // next Tab missed the last item.
+        let firstLineBefore = original.prefix { $0 != "\n" }
+        let firstShift = ((lines.first ?? "") as NSString).length - (String(firstLineBefore) as NSString).length
+        let totalShift = (replacement as NSString).length - (original as NSString).length
         textView.insertText(replacement, replacementRange: range)
 
-        let shift = direction > 0 ? 2 : -2
-        textView.setSelectedRange(NSRange(
-            location: max(start, selection.location + shift),
-            length: selection.length
-        ))
+        let location = max(start, selection.location + firstShift)
+        let selectionEnd = selection.length == 0 ? location : max(location, NSMaxRange(selection) + totalShift)
+        textView.setSelectedRange(NSRange(location: location, length: selectionEnd - location))
         return true
     }
 

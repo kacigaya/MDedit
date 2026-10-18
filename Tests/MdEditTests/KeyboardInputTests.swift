@@ -84,6 +84,33 @@ struct KeyboardInputTests {
         #expect(harness.document.text == "- a\n- b")
     }
 
+    /// The selection kept its old length as the lines grew, so the second
+    /// Tab missed the last item and the third replaced the lot with a tab.
+    @Test("Tab and Shift-Tab over several items move them all, again and again")
+    func indentSelectionByKeyboard() {
+        let text = "- top\n- a\n- b\n- c"
+        let harness = Harness(text)
+        let textView = harness.editor.textView
+        let items = NSRange(location: 6, length: (text as NSString).length - 6)
+        textView.setSelectedRange(items)
+        harness.tab()
+        harness.tab()
+        #expect(harness.document.text == "- top\n    - a\n    - b\n    - c")
+        #expect(textView.selectedRange() == NSRange(location: 10, length: (harness.document.text as NSString).length - 10))
+        harness.tab(shift: true)
+        harness.tab(shift: true)
+        #expect(harness.document.text == text)
+        #expect(textView.selectedRange() == items)
+    }
+
+    @Test("Shift-Tab on an item with one leading space moves the caret back by one")
+    func outdentOneSpace() {
+        let harness = Harness(" - a")
+        harness.tab(shift: true)
+        #expect(harness.document.text == "- a")
+        #expect(harness.editor.textView.selectedRange() == NSRange(location: 3, length: 0))
+    }
+
     @Test("An opening bracket closes itself, and Backspace removes the pair")
     func pairsByKeyboard() {
         let harness = Harness("call ")
