@@ -67,7 +67,31 @@ extension MarkdownTextView {
             replace(at: editTargets) { _ in text }
             return
         }
+        if hasMarkedText(), !additionalCarets.isEmpty {
+            // An input method committing what it composed at the selection:
+            // the same text then goes in at every other caret.
+            let text = (string as? NSAttributedString)?.string ?? string as? String ?? ""
+            keepingCarets(after: replacementRange.location != NSNotFound ? replacementRange.location : markedRange().location) {
+                super.insertText(string, replacementRange: replacementRange)
+            }
+            markComposition()
+            let primary = selectedRange()
+            replace(at: Self.merged([primary] + additionalCarets.map { NSRange(location: $0, length: 0) })) { $0 == primary ? "" : text }
+            return
+        }
         super.insertText(string, replacementRange: replacementRange)
+    }
+
+    /// Runs an input method's edit at the selection without the selection
+    /// it leaves clearing the extra carets, and moves those after where it
+    /// starts by however much it lengthened the text. They take the text
+    /// only once it is committed.
+    func keepingCarets(after start: Int, _ edit: () -> Void) {
+        guard !additionalCarets.isEmpty, let storage = textStorage else { return edit() }
+        let length = storage.length
+        isEditingAtCaretsScope(edit)
+        let delta = storage.length - length
+        additionalCarets = additionalCarets.map { $0 > start ? max(start, $0 + delta) : $0 }
     }
 
     override func insertNewline(_ sender: Any?) {
@@ -197,10 +221,38 @@ extension MarkdownTextView {
         super.draw(dirtyRect)
         guard !additionalCarets.isEmpty else { return }
         insertionPointColor.setFill()
-        for caret in additionalCarets {
+        for caret in visibleCarets(in: dirtyRect) {
             guard let rect = caretRect(at: caret), rect.intersects(dirtyRect) else { continue }
             rect.fill()
         }
+    }
+
+    /// The extra carets within a rectangle of the view. Each blink redraws
+    /// the view, and finding where every one of thousands of carets sits
+    /// laid out the document each time; they are sorted, so the ones in the
+    /// characters laid out there are found by bisection.
+    func visibleCarets(in rect: NSRect) -> ArraySlice<Int> {
+        guard let layoutManager, let textContainer, let storage = textStorage, !additionalCarets.isEmpty else { return [] }
+        var bounds = rect
+        bounds.origin.x -= textContainerOrigin.x
+        bounds.origin.y -= textContainerOrigin.y
+        let glyphs = layoutManager.glyphRange(forBoundingRectWithoutAdditionalLayout: bounds, in: textContainer)
+        let characters = layoutManager.characterRange(forGlyphRange: glyphs, actualGlyphRange: nil)
+        // A caret sits before a character, or after the last one on its line.
+        var upper = NSMaxRange(characters)
+        let extra = layoutManager.extraLineFragmentRect
+        if (extra.height > 0 && extra.intersects(bounds)) || upper >= storage.length { upper = storage.length }
+        func firstIndex(atLeast location: Int) -> Int {
+            var low = 0, high = additionalCarets.count
+            while low < high {
+                let middle = (low + high) / 2
+                if additionalCarets[middle] < location { low = middle + 1 } else { high = middle }
+            }
+            return low
+        }
+        let start = firstIndex(atLeast: characters.location)
+        let end = firstIndex(atLeast: upper + 1)
+        return additionalCarets[start..<max(start, end)]
     }
 
     /// The rectangle a caret at a location occupies, in view coordinates.

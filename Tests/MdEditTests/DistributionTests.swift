@@ -185,4 +185,25 @@ struct UpdateCheckTests {
         #expect(release.version == [1, 2, 0])
         #expect(release.htmlURL.absoluteString.hasSuffix("v1.2.0"))
     }
+
+    /// Every file and folder restored was given access that was never
+    /// stopped, each holding a sandbox extension for the rest of the run.
+    @Test("Access to a closed tab or replaced folder is stopped, not to what stays open")
+    func scopedAccessReleased() {
+        var stopped: [String] = []
+        let access = ScopedAccess { stopped.append($0.path) }
+        let folder = URL(fileURLWithPath: "/notes")
+        let inside = URL(fileURLWithPath: "/notes/a.md")
+        let tab = URL(fileURLWithPath: "/elsewhere/b.md")
+        let twice = URL(fileURLWithPath: "/elsewhere/c.md")
+        let lookalike = URL(fileURLWithPath: "/notes-old")
+        for url in [folder, inside, tab, twice, twice, lookalike] { access.add(url) }
+        // The folder is no longer the workspace, but a tab inside it is open.
+        access.release(keeping: [inside, tab, twice])
+        #expect(stopped == ["/notes-old"])
+        #expect(access.paths == ["/notes", "/notes/a.md", "/elsewhere/b.md", "/elsewhere/c.md"])
+        access.release(keeping: [tab])
+        #expect(stopped.sorted() == ["/elsewhere/c.md", "/elsewhere/c.md", "/notes", "/notes-old", "/notes/a.md"])
+        #expect(access.paths == ["/elsewhere/b.md"])
+    }
 }

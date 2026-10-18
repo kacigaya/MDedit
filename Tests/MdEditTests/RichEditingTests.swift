@@ -374,6 +374,42 @@ struct TypingTests {
         #expect(!Typesetter.shared.isQueued(old))
     }
 
+    /// Blocks were remembered by the line they started on and never moved,
+    /// so a line added above left them under another block's old number.
+    @Test("A block's typeset source moves with the lines above it")
+    func blockRequestsShiftWithEdits() {
+        let storage = MarkdownTextStorage(theme: .light)
+        storage.replaceCharacters(in: NSRange(location: 0, length: 0), with: "$$\na\n$$\n\n$$\nb\n$$\n")
+        #expect(Set(storage.blockRequests.keys) == [0, 4])
+        storage.replaceCharacters(in: NSRange(location: 0, length: 0), with: "x\n")
+        #expect(Set(storage.blockRequests.keys) == [1, 5])
+        #expect(storage.blockRequests[5]?.source == "b")
+        // Deleting the first block forgets it and withdraws its source.
+        storage.replaceCharacters(in: NSRange(location: 2, length: 9), with: "")
+        #expect(Set(storage.blockRequests.keys) == [1])
+        #expect(storage.blockRequests[1]?.source == "b")
+        #expect(storage.requestedTypesetting.filter { $0.kind == .displayMath }.map(\.source) == ["b"])
+    }
+
+    /// The preview an open block holds still was kept after it closed, a
+    /// diagram's bitmap with it, for as long as the document was open.
+    @Test("A closed block lets go of its preview")
+    func closedBlockDropsPreview() async throws {
+        let storage = MarkdownTextStorage(theme: .light)
+        storage.replaceCharacters(in: NSRange(location: 0, length: 0), with: "Text\n\n$$\na^2\n$$\n")
+        let request = try #require(storage.blockRequests[2])
+        for _ in 0..<250 where Typesetter.shared.rendering(for: request) == nil {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        try #require(Typesetter.shared.rendering(for: request) != nil, "KaTeX did not typeset in time")
+        storage.revealedLines = 2...4
+        #expect(storage.lastPreviews[2] != nil)
+        storage.replaceCharacters(in: NSRange(location: 0, length: 0), with: "x\n")
+        #expect(storage.lastPreviews[3] != nil && storage.lastPreviews[2] == nil)
+        storage.revealedLines = 0...0
+        #expect(storage.lastPreviews.isEmpty)
+    }
+
     /// A definition added below left an earlier `[foo]` with no
     /// destination until its own line was edited.
     @Test("Adding a reference definition updates the links that use it")

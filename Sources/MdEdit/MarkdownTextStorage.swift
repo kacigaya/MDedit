@@ -287,8 +287,9 @@ final class MarkdownTextStorage: MDBackedTextStorage {
     /// Formulas and diagrams this document has asked to be typeset.
     private(set) var requestedTypesetting: Set<Typesetter.Request> = []
     /// The last preview each open block showed, by its first line, so the
-    /// preview holds still while the next one is typeset.
-    private var lastPreviews: [Int: InlineImage] = [:]
+    /// preview holds still while the next one is typeset. Kept only while
+    /// the block is open, and moved with the lines around it.
+    private(set) var lastPreviews: [Int: InlineImage] = [:]
     /// The typeset block found for a run of lines, so styling a block line by
     /// line looks for it once.
     private var blockLookup: (lines: ClosedRange<Int>, block: TypesetBlock?)?
@@ -300,10 +301,32 @@ final class MarkdownTextStorage: MDBackedTextStorage {
     /// lines, so building it for each one was quadratic in a long block.
     private var typesetLookup: (lines: ClosedRange<Int>, request: Typesetter.Request)?
     /// The source each block last asked for, by its first line, so an edit
-    /// withdraws the one it replaces.
-    private var blockRequests: [Int: Typesetter.Request] = [:]
+    /// withdraws the one it replaces. Moved with the lines around it, so a
+    /// block that moves onto another's old line does not withdraw that one's.
+    private(set) var blockRequests: [Int: Typesetter.Request] = [:]
     /// Inline formulas found while styling a line, drawn once its markers are set.
     private var pendingInlineMath: [(range: NSRange, rendering: Typesetter.Rendering)] = []
+
+    /// Text an input method is still composing, and the look the view marks
+    /// it with: styling sets each line's attributes afresh, which took that
+    /// look off and left nothing to show what was still to be committed.
+    private var composing: (range: NSRange, attributes: [NSAttributedString.Key: Any])?
+
+    /// Told by the view after each change to the text being composed, and
+    /// with nil once it is committed or abandoned.
+    func markComposing(_ range: NSRange?, attributes: [NSAttributedString.Key: Any]) {
+        let previous = composing?.range
+        composing = range.flatMap { $0.length > 0 && NSMaxRange($0) <= backing.length ? ($0, attributes) : nil }
+        if let composing {
+            beginEditing()
+            backing.addAttributes(composing.attributes, range: composing.range)
+            edited(.editedAttributes, range: composing.range, changeInLength: 0)
+            endEditing()
+        } else if let previous, NSMaxRange(previous) <= backing.length {
+            // Abandoned in place: its lines take their own look back.
+            restyle(lines: IndexSet(integersIn: line(at: previous.location)...lastLine(of: previous)))
+        }
+    }
 
     private var isProcessingEdit = false
     private var hasDeferredReveal = false
@@ -459,6 +482,55 @@ final class MarkdownTextStorage: MDBackedTextStorage {
         return dropped
     }
 
+    /// Moves what is kept by a block's first line with an edit, as
+    /// `shiftAwaits` moves the waiting lines. A block that started on a
+    /// replaced line keeps its place while it is still among the edited
+    /// lines, to be checked once they are styled; past them it is gone.
+    private func shiftBlocks(dropping replaced: ClosedRange<Int>, keepingUpTo editEnd: Int, by delta: Int) {
+        guard !blockRequests.isEmpty || !lastPreviews.isEmpty else { return }
+        func shifted(_ line: Int) -> Int? {
+            if line > replaced.upperBound { return line + delta }
+            return line < replaced.lowerBound || line <= editEnd ? line : nil
+        }
+        var requests: [Int: Typesetter.Request] = [:]
+        var dropped: [Typesetter.Request] = []
+        for (line, request) in blockRequests {
+            if let moved = shifted(line) { requests[moved] = request } else { dropped.append(request) }
+        }
+        blockRequests = requests
+        withdraw(dropped)
+        var previews: [Int: InlineImage] = [:]
+        for (line, preview) in lastPreviews {
+            if let moved = shifted(line) { previews[moved] = preview }
+        }
+        lastPreviews = previews
+    }
+
+    /// Forgets the blocks that no longer start where they were kept, once
+    /// the lines an edit touched are styled.
+    private func pruneBlocks(in lines: ClosedRange<Int>) {
+        var dropped: [Typesetter.Request] = []
+        for (line, request) in blockRequests where lines.contains(line) && typesetBlock(containing: line)?.lines.lowerBound != line {
+            blockRequests[line] = nil
+            dropped.append(request)
+        }
+        withdraw(dropped)
+        for line in lastPreviews.keys where lines.contains(line) && typesetBlock(containing: line)?.lines.lowerBound != line {
+            lastPreviews[line] = nil
+        }
+    }
+
+    /// Withdraws sources no block asks for any more; the same formula in
+    /// another block keeps its own.
+    private func withdraw(_ requests: [Typesetter.Request]) {
+        guard !requests.isEmpty else { return }
+        let inUse = Set(blockRequests.values)
+        for request in requests where !inUse.contains(request) {
+            MainActor.assumeIsolated { Typesetter.shared.cancel(request) }
+            requestedTypesetting.remove(request)
+        }
+    }
+
     /// Restyles just the lines with any of these attributes: a scan of the
     /// runs, where restyling everything would rebuild them all.
     private func restyleLines(carrying keys: [NSAttributedString.Key]) {
@@ -548,6 +620,8 @@ final class MarkdownTextStorage: MDBackedTextStorage {
     override func processEditing() {
         isProcessingEdit = true
         if editedMask.contains(.editedCharacters) {
+            // The range no longer holds; the view marks the new one after.
+            composing = nil
             let text = self.text
             let extents = foldedHeadings.isEmpty ? [:] : foldExtents()
             let oldLineCount = structure.lineCount
@@ -563,6 +637,9 @@ final class MarkdownTextStorage: MDBackedTextStorage {
             let editEnd = max(updated.lowerBound, line(at: NSMaxRange(editedRange)))
             let replacedAwaiting = lineDelta != 0
                 && shiftAwaits(dropping: updated.lowerBound...max(updated.lowerBound, editEnd - lineDelta), by: lineDelta)
+            if lineDelta != 0 {
+                shiftBlocks(dropping: updated.lowerBound...max(updated.lowerBound, editEnd - lineDelta), keepingUpTo: editEnd, by: lineDelta)
+            }
             blockLookup = nil
             tableLookup = nil
             if structure.touchedDefinitions {
@@ -608,6 +685,7 @@ final class MarkdownTextStorage: MDBackedTextStorage {
             lineRange = clampedLineRange(lineRange) ?? lineRange
             // A formula or diagram is one image: editing a line of it redraws it all.
             lineRange = styleWidened(lineRange, linesKept: lineDelta == 0)
+            pruneBlocks(in: min(lineRange.lowerBound, updated.lowerBound)...max(lineRange.upperBound, editEnd))
             let restyled = characterRange(forLines: lineRange)
             // Styling sets each line's font afresh, taking emoji and CJK off
             // the fallback fonts that draw them; AppKit puts those back only
@@ -729,6 +807,10 @@ final class MarkdownTextStorage: MDBackedTextStorage {
         defer {
             definitionLookup = nil
             typesetLookup = nil
+            if let composing {
+                let marked = NSIntersectionRange(composing.range, characterRange(forLines: lower...upper))
+                if marked.length > 0 { backing.addAttributes(composing.attributes, range: marked) }
+            }
         }
 
         for line in lower...upper {
@@ -857,9 +939,13 @@ final class MarkdownTextStorage: MDBackedTextStorage {
                         preview = lastPreviews[block.lines.lowerBound]
                     }
                 }
-            } else if let rendering {
-                styleTypesetBlock(line: line, block: block, info: info, range: range, image: fittedImage(rendering, centered: true, label: request.spokenLabel))
-                return
+            } else {
+                // Closed: the preview it held, a diagram's bitmap, goes with it.
+                lastPreviews[block.lines.lowerBound] = nil
+                if let rendering {
+                    styleTypesetBlock(line: line, block: block, info: info, range: range, image: fittedImage(rendering, centered: true, label: request.spokenLabel))
+                    return
+                }
             }
         }
         pendingInlineMath.removeAll()

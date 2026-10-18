@@ -171,6 +171,9 @@ final class Document {
         url = newURL
         isMissingOnDisk = false
         FileAccess.remember(newURL)
+        // Sandboxed, access started for the old path is let go once no tab
+        // is there; this takes it for the new one.
+        if FileAccess.isSandboxed { _ = FileAccess.resolve(newURL) }
         beginWatching()
         onMove?()
     }

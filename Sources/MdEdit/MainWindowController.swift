@@ -359,6 +359,9 @@ final class MainWindowController: NSWindowController {
         } else {
             select(index: min(index, documents.count - 1))
         }
+        // The session forgets the tab now, and the access to its file a
+        // sandboxed app started goes with it.
+        onSessionChange?()
     }
 
     private func rememberClosed(_ document: Document) {

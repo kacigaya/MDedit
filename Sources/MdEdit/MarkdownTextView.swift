@@ -15,8 +15,13 @@ final class MarkdownTextView: NSTextView {
     var onLoseFocus: (() -> Void)?
 
     /// Insertion points besides the selection, for typing in several places.
+    /// Kept in order, so drawing can find the ones on screen.
     var additionalCarets: [Int] = [] {
-        didSet { if additionalCarets != oldValue { needsDisplay = true } }
+        didSet {
+            guard additionalCarets != oldValue else { return }
+            if zip(additionalCarets, additionalCarets.dropFirst()).contains(where: >) { additionalCarets.sort() }
+            needsDisplay = true
+        }
     }
     /// Set while an edit at several places runs, so the selection it leaves
     /// behind does not clear the extra carets, and the delegate stays out.
@@ -37,7 +42,21 @@ final class MarkdownTextView: NSTextView {
     override func setMarkedText(_ string: Any, selectedRange: NSRange, replacementRange: NSRange) {
         isSettingMarkedText = true
         defer { isSettingMarkedText = false }
-        super.setMarkedText(string, selectedRange: selectedRange, replacementRange: replacementRange)
+        keepingCarets(after: replacementRange.location != NSNotFound ? replacementRange.location
+                      : hasMarkedText() ? markedRange().location : self.selectedRange().location) {
+            super.setMarkedText(string, selectedRange: selectedRange, replacementRange: replacementRange)
+        }
+        markComposition()
+    }
+
+    override func unmarkText() {
+        super.unmarkText()
+        markComposition()
+    }
+
+    /// Tells the storage what is being composed, so restyling keeps its look.
+    func markComposition() {
+        (textStorage as? MarkdownTextStorage)?.markComposing(hasMarkedText() ? markedRange() : nil, attributes: markedTextAttributes ?? [:])
     }
 
     override func resignFirstResponder() -> Bool {

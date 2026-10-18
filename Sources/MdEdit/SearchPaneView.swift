@@ -43,7 +43,9 @@ final class SearchPaneView: NSView {
         outline.style = .sourceList
         outline.backgroundColor = .clear
         outline.indentationPerLevel = 8
-        outline.usesAutomaticRowHeights = true
+        // One height for every row: measuring each of up to 2,000 rows laid
+        // out its cell's constraints on every query.
+        outline.rowHeight = 22
         outline.dataSource = self
         outline.delegate = self
         outline.target = self
@@ -200,9 +202,9 @@ extension SearchPaneView: NSOutlineViewDataSource, NSOutlineViewDelegate {
     }
 
     func outlineView(_ outlineView: NSOutlineView, viewFor tableColumn: NSTableColumn?, item: Any) -> NSView? {
-        let label = NSTextField(labelWithString: "")
-        label.lineBreakMode = .byTruncatingTail
-        label.translatesAutoresizingMaskIntoConstraints = false
+        let cell = outlineView.makeView(withIdentifier: Self.cellIdentifier, owner: self) as? NSTableCellView ?? Self.makeCell()
+        guard let label = cell.textField else { return cell }
+        label.toolTip = nil
         if let group = item as? FileGroup {
             let name = group.url.lastPathComponent
             let folder = workspace.map { ($0.relativePath(of: group.url) as NSString).deletingLastPathComponent } ?? ""
@@ -219,14 +221,25 @@ extension SearchPaneView: NSOutlineViewDataSource, NSOutlineViewDelegate {
             label.attributedStringValue = snippet(item.match)
             label.toolTip = item.match.lineText
         }
+        return cell
+    }
+
+    private static let cellIdentifier = NSUserInterfaceItemIdentifier("searchResult")
+
+    /// A row's cell, made once and then reused as rows scroll by and each
+    /// query reloads them.
+    private static func makeCell() -> NSTableCellView {
+        let label = NSTextField(labelWithString: "")
+        label.lineBreakMode = .byTruncatingTail
+        label.translatesAutoresizingMaskIntoConstraints = false
         let cell = NSTableCellView()
+        cell.identifier = cellIdentifier
         cell.addSubview(label)
         cell.textField = label
         NSLayoutConstraint.activate([
             label.leadingAnchor.constraint(equalTo: cell.leadingAnchor, constant: 2),
             label.trailingAnchor.constraint(lessThanOrEqualTo: cell.trailingAnchor, constant: -4),
-            label.topAnchor.constraint(equalTo: cell.topAnchor, constant: 3),
-            label.bottomAnchor.constraint(equalTo: cell.bottomAnchor, constant: -3),
+            label.centerYAnchor.constraint(equalTo: cell.centerYAnchor),
         ])
         return cell
     }

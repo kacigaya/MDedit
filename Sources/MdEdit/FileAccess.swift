@@ -71,13 +71,23 @@ enum FileAccess {
             guard let resolved = try? URL(resolvingBookmarkData: data, options: options.resolve, bookmarkDataIsStale: &isStale) else {
                 return url
             }
-            // Held for the rest of the run: the tab or folder stays open.
-            if isSandboxed { _ = resolved.startAccessingSecurityScopedResource() }
+            // Held while the tab or folder stays open; see `releaseAccess`.
+            if isSandboxed, resolved.startAccessingSecurityScopedResource() { access.add(resolved) }
             if isStale || resolved.standardizedFileURL.path != path { moved.append(resolved) }
             return resolved
         }
         for url in moved { remember(url, in: defaults) }
         return resolved
+    }
+
+    static let access = ScopedAccess()
+
+    /// Stops the access `resolve` started to files and folders no tab or
+    /// workspace uses any more: closed, replaced, or moved, and taken again
+    /// at the new path. A folder holding an open file keeps its access, as
+    /// the file may have none of its own.
+    static func releaseAccess(keeping open: [URL]) {
+        access.release(keeping: open)
     }
 
     private struct Entry: Codable {
@@ -93,6 +103,49 @@ enum FileAccess {
     private static func save(_ bookmarks: [Entry], to defaults: UserDefaults) {
         if let data = try? PropertyListEncoder().encode(bookmarks) {
             defaults.set(data, forKey: defaultsKey)
+        }
+    }
+}
+
+/// The files and folders whose security-scoped access was started, by path.
+/// Each start holds a sandbox extension in the kernel until it is stopped,
+/// and holding one for every tab ever restored leaked them for the run.
+final class ScopedAccess: @unchecked Sendable {
+    private let lock = NSLock()
+    /// Starts are counted: one path can be resolved for two windows, and
+    /// each start takes a stop of its own.
+    private var started: [String: (url: URL, count: Int)] = [:]
+    private let stop: (URL) -> Void
+
+    init(stop: @escaping (URL) -> Void = { $0.stopAccessingSecurityScopedResource() }) {
+        self.stop = stop
+    }
+
+    var paths: Set<String> {
+        lock.withLock { Set(started.keys) }
+    }
+
+    func add(_ url: URL) {
+        lock.withLock {
+            let path = url.standardizedFileURL.path
+            started[path] = (url, (started[path]?.count ?? 0) + 1)
+        }
+    }
+
+    /// Stops access to everything that is neither one of these nor a folder
+    /// holding one.
+    func release(keeping open: [URL]) {
+        let unused: [(url: URL, count: Int)] = lock.withLock {
+            guard !started.isEmpty else { return [] }
+            let openPaths = open.map(\.standardizedFileURL.path)
+            let unused = started.filter { path, _ in
+                !openPaths.contains { $0 == path || $0.hasPrefix(path.hasSuffix("/") ? path : path + "/") }
+            }
+            for path in unused.keys { started[path] = nil }
+            return Array(unused.values)
+        }
+        for entry in unused {
+            for _ in 0..<entry.count { stop(entry.url) }
         }
     }
 }

@@ -1,4 +1,4 @@
-import Foundation
+import AppKit
 import Testing
 @testable import MdEdit
 
@@ -70,5 +70,36 @@ struct WorkspaceTests {
 
         let edited = WorkspaceSearch.search("here", in: [one, two], overrides: [two: "changed\n"])
         #expect(edited.isEmpty)
+    }
+
+    /// Every row had a fresh cell built for it, constraints and all, and
+    /// measured for its height: up to 2,000 of them on each query.
+    @MainActor
+    @Test("Find in Folder reuses its result rows")
+    func searchReusesRows() async throws {
+        let url = URL(fileURLWithPath: "/nonexistent/notes.md")
+        let pane = SearchPaneView(frame: NSRect(x: 0, y: 0, width: 300, height: 300))
+        let window = NSWindow(contentRect: pane.frame, styleMask: [.titled], backing: .buffered, defer: false)
+        window.contentView = pane
+        pane.searchScope = { (nil, [url], [url: String(repeating: "alpha\n", count: 500)]) }
+        pane.field.stringValue = "alpha"
+        pane.search()
+        await pane.finishSearching()
+        let scrollView = pane.subviews.first { $0 is NSScrollView } as? NSScrollView
+        let outline = try #require(scrollView?.documentView as? NSOutlineView)
+        #expect(!outline.usesAutomaticRowHeights)
+        #expect(outline.numberOfRows == 501)
+        var cells: Set<ObjectIdentifier> = []
+        for row in stride(from: 0, to: outline.numberOfRows, by: 5) {
+            outline.scrollRowToVisible(row)
+            window.layoutIfNeeded()
+            window.display()
+            let visible = outline.rows(in: outline.visibleRect)
+            for shown in visible.location..<NSMaxRange(visible) {
+                if let cell = outline.view(atColumn: 0, row: shown, makeIfNecessary: false) { cells.insert(ObjectIdentifier(cell)) }
+            }
+        }
+        // Scrolling through every row took only a screenful of cells or so.
+        #expect(cells.count < 60)
     }
 }

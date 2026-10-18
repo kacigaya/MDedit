@@ -171,6 +171,46 @@ struct KeyboardInputTests {
         #expect(harness.document.text == "è` here")
     }
 
+    /// Restyling the line took off the highlight an input method marks the
+    /// text it is composing with, so nothing showed what was still to commit.
+    @Test("Text being composed keeps its marked look")
+    func markedTextKeepsHighlight() throws {
+        let harness = Harness("# Title\n")
+        let view = harness.editor.textView
+        let highlight = try #require(view.markedTextAttributes?[.backgroundColor] as? NSColor)
+        view.setSelectedRange(NSRange(location: 7, length: 0))
+        view.setMarkedText("にほ", selectedRange: NSRange(location: 2, length: 0), replacementRange: NSRange(location: NSNotFound, length: 0))
+        #expect(view.markedRange() == NSRange(location: 7, length: 2))
+        #expect(view.textStorage?.attribute(.backgroundColor, at: 8, effectiveRange: nil) as? NSColor == highlight)
+        // A restyle of the line while composing, as a caret move or an
+        // arriving image makes, keeps it too.
+        harness.document.storage.restyleAll()
+        #expect(view.textStorage?.attribute(.backgroundColor, at: 8, effectiveRange: nil) as? NSColor == highlight)
+        view.insertText("日本", replacementRange: NSRange(location: NSNotFound, length: 0))
+        #expect(harness.document.text == "# Title日本\n")
+        #expect(view.textStorage?.attribute(.backgroundColor, at: 8, effectiveRange: nil) == nil)
+    }
+
+    /// Composing cleared the extra carets, so an input method typed in one
+    /// place only.
+    @Test("Composed text goes in at every caret")
+    func compositionAtCarets() {
+        let harness = Harness("ab\ncd\nef")
+        let view = harness.editor.textView
+        view.setSelectedRange(NSRange(location: 1, length: 0))
+        view.addCaret(below: true)
+        view.addCaret(below: true)
+        #expect(view.additionalCarets == [4, 7])
+        view.setMarkedText("k", selectedRange: NSRange(location: 1, length: 0), replacementRange: NSRange(location: NSNotFound, length: 0))
+        view.setMarkedText("か", selectedRange: NSRange(location: 1, length: 0), replacementRange: NSRange(location: NSNotFound, length: 0))
+        #expect(view.additionalCarets == [5, 8])
+        view.insertText("家", replacementRange: NSRange(location: NSNotFound, length: 0))
+        #expect(harness.document.text == "a家b\nc家d\ne家f")
+        #expect(view.editTargets.map(\.location) == [2, 6, 10])
+        view.undoManager?.undo()
+        #expect(harness.document.text == "ab\ncd\nef")
+    }
+
     @Test("A line selected by triple-click is the only one a line command changes")
     func tripleClickedLine() {
         let harness = Harness("first\nsecond\n")

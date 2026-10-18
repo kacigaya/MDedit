@@ -47,6 +47,33 @@ struct MultiCursorTests {
         #expect(document.text == "- a\n\n- b\n\n")
     }
 
+    /// Each blink redrew the view, and drawing found where every extra caret
+    /// sat, laying out the whole document for thousands of them.
+    @Test("Drawing looks only at the carets in the dirty rectangle")
+    func visibleCarets() throws {
+        let lines = 5000
+        let (_, editor) = makeEditor(String(repeating: "word\n", count: lines))
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 400, height: 300), styleMask: [.titled], backing: .buffered, defer: true)
+        window.contentView = editor.view
+        let textView = editor.textView
+        textView.setSelectedRange(NSRange(location: 0, length: 0))
+        textView.additionalCarets = Array(stride(from: 5 * lines, to: 0, by: -5))
+        #expect(textView.additionalCarets.first == 5)
+        let layoutManager = try #require(textView.layoutManager), container = try #require(textView.textContainer)
+        let top = NSRect(x: 0, y: 0, width: textView.bounds.width, height: 200)
+        layoutManager.ensureLayout(forBoundingRect: top, in: container)
+        let visible = textView.visibleCarets(in: top)
+        #expect(!visible.isEmpty && visible.count < 50)
+        #expect(visible.first == 5)
+        // Every caret drawn in that rectangle is among them.
+        let drawn = textView.additionalCarets.filter { textView.caretRect(at: $0)?.intersects(top) == true }
+        #expect(Set(drawn).isSubset(of: Set(visible)))
+        // The caret after the last line sits on the extra line fragment.
+        layoutManager.ensureLayout(for: container)
+        let end = try #require(textView.caretRect(at: 5 * lines))
+        #expect(textView.visibleCarets(in: end.insetBy(dx: -2, dy: -2)).last == 5 * lines)
+    }
+
     @Test("Moving the selection drops the extra carets")
     func moveClears() {
         let (_, editor) = makeEditor("aa\nbb\n")

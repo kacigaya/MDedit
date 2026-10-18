@@ -186,7 +186,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard hasRestored else { return }
         let session = Session(windows: controllers.map { $0.windowSession() })
         session.save()
-        FileAccess.pin(session.windows.flatMap { $0.tabs.map(\.url) + [$0.workspace].compactMap { $0 } })
+        let open = session.windows.flatMap { $0.tabs.map(\.url) + [$0.workspace].compactMap { $0 } }
+        FileAccess.pin(open)
+        FileAccess.releaseAccess(keeping: open)
     }
 
     // MARK: - Menu actions
