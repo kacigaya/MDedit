@@ -5,6 +5,34 @@ workflow publishes the section for a version as its release notes.
 
 ## [Unreleased]
 
+## [1.2.1] - 2026-10-18
+
+### Fixed
+- Work is harder to lose. Unsaved text is snapshotted for recovery at least
+  every ten seconds while you type, not only once you pause. Saving over a
+  file another app changed since it was read now asks first, and a file that
+  can no longer be read says so instead of passing off the old text as its
+  own. Revert to Saved leaves the tab saved.
+- A file renamed or moved in Finder takes its tab along, instead of showing
+  as missing and being saved again under its old name.
+- Typing stays fast in long documents: in tables, huge code blocks and long
+  hard-wrapped paragraphs, a keystroke no longer does work in proportion to
+  their size, and moving the caret far up or down no longer restyles every
+  line in between. Images and formulas arriving restyle only their own lines.
+- Find in Folder lists the folder once rather than on every pause in typing,
+  stops searches it no longer needs, and never shows stale results.
+- Emoji and CJK text no longer turn invisible while typing next to them.
+- Tab and Shift-Tab over several list items keep all of them selected.
+- Composing with an input method keeps its highlight, and extra carets
+  survive it.
+- The editor agrees with export on tab-indented fences and quotes, front
+  matter (only when it reads as YAML), table rows without pipes and `<?>`.
+  Quick Look hides front matter in files with Windows line endings, and Lua
+  block comments are highlighted.
+- Selecting a whole line no longer reveals the markdown of the next one.
+- Launch no longer waits on a server or disk that is no longer connected,
+  and Word and RTF export no longer fetch remote images while the app waits.
+
 ## [1.2.0] - 2026-10-17
 
 ### Changed
