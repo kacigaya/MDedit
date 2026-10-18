@@ -970,7 +970,10 @@ final class MainWindowController: NSWindowController {
         sidebar.files.setRoot(newWorkspace?.root)
         window?.subtitle = newWorkspace?.root.lastPathComponent ?? ""
         directoryWatcher = newWorkspace.flatMap { workspace in
-            DirectoryWatcher(url: workspace.root) { [weak self] change in self?.sidebar.files.folderContentsChanged(change) }
+            DirectoryWatcher(url: workspace.root) { [weak self] change in
+                self?.sidebar.files.folderContentsChanged(change)
+                self?.sidebar.search.workspaceContentsChanged()
+            }
         }
         onSessionChange?()
     }

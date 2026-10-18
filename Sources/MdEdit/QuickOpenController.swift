@@ -14,6 +14,8 @@ final class QuickOpenController: NSObject {
     }
     private var shown: [Candidate] = []
     private var loadTask: Task<Void, Never>?
+    /// Counts showings, so a load left over from an earlier one is ignored.
+    private var loadGeneration = 0
     /// The last query and which candidates it matched: a query that only
     /// adds letters can match nothing outside them.
     private var lastFilter: (needle: [Character], matches: [Int])?
@@ -110,14 +112,18 @@ final class QuickOpenController: NSObject {
         filter()
 
         loadTask?.cancel()
+        loadGeneration += 1
         if let workspace {
             let listed = seen
+            let generation = loadGeneration
             loadTask = Task.detached(priority: .userInitiated) { [weak self] in
-                let files = workspace.markdownFiles()
+                let files = workspace.markdownFiles { Task.isCancelled }
                     .filter { !listed.contains($0.standardizedFileURL.path) }
                 guard !Task.isCancelled else { return }
                 await MainActor.run {
-                    guard let self else { return }
+                    // A load from an earlier showing, finishing after this
+                    // one began, would add its files a second time.
+                    guard let self, self.loadGeneration == generation else { return }
                     self.candidates += files.map { Candidate(url: $0, display: workspace.relativePath(of: $0)) }
                     self.filter()
                 }

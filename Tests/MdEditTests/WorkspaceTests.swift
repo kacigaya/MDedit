@@ -25,6 +25,19 @@ struct WorkspaceTests {
         #expect(workspace.markdownFiles().map(workspace.relativePath(of:)) == ["a.md", "notes/b.markdown", "notes/deep/d.txt"])
     }
 
+    /// A cancelled search walked the rest of the folder anyway, so searches
+    /// typed in a large folder piled up walks side by side.
+    @Test("A cancelled walk stops early")
+    func cancelledWalk() throws {
+        let root = try makeFolder(Dictionary(uniqueKeysWithValues: (0..<600).map { ("f\($0).md", "") }))
+        defer { try? FileManager.default.removeItem(at: root) }
+        var asked = 0
+        let files = Workspace(root: root).markdownFiles { asked += 1; return true }
+        #expect(asked == 1)
+        #expect(files.count < 600)
+        #expect(Workspace(root: root).markdownFiles().count == 600)
+    }
+
     @Test("Fuzzy matching prefers file names, word starts and runs")
     func fuzzy() {
         #expect(FuzzyMatcher.score("xyz", in: "notes/today.md") == nil)

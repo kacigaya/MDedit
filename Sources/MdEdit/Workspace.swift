@@ -10,6 +10,10 @@ struct Workspace: Equatable, Sendable {
     static let skippedFolders: Set<String> = ["node_modules", ".build", "build", "DerivedData", "Pods", "vendor"]
     /// Enough for any notes folder; stops a mistaken pick of `/` from stalling.
     static let fileLimit = 20_000
+    /// Entries looked at before giving up. The file limit counts only
+    /// markdown files, so a folder of code or a home folder, with few notes
+    /// among many other files, was walked to the end however long it took.
+    static let visitLimit = 200_000
 
     private static let defaultsKey = "workspaceRoot"
 
@@ -28,15 +32,19 @@ struct Workspace: Equatable, Sendable {
         markdownExtensions.contains(url.pathExtension.lowercased())
     }
 
-    /// Every markdown file below the root, skipping hidden and dependency folders.
-    func markdownFiles() -> [URL] {
+    /// Every markdown file below the root, skipping hidden and dependency
+    /// folders. Stops early, with what it found so far, once `isCancelled`.
+    func markdownFiles(isCancelled: () -> Bool = { false }) -> [URL] {
         guard let enumerator = FileManager.default.enumerator(
             at: root,
             includingPropertiesForKeys: [.isDirectoryKey],
             options: [.skipsHiddenFiles, .skipsPackageDescendants]
         ) else { return [] }
         var files: [URL] = []
+        var visited = 0
         for case let url as URL in enumerator {
+            visited += 1
+            if visited >= Self.visitLimit || (visited % 256 == 0 && isCancelled()) { break }
             let isDirectory = (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) ?? false
             if isDirectory {
                 if Self.skippedFolders.contains(url.lastPathComponent) { enumerator.skipDescendants() }
