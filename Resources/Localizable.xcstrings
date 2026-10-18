@@ -610,6 +610,9 @@
     "Save" : {
 
     },
+    "Save Anyway" : {
+
+    },
     "Save As…" : {
 
     },
@@ -620,6 +623,9 @@
 
     },
     "Saved" : {
+
+    },
+    "Saving now replaces those changes with yours." : {
 
     },
     "Searching…" : {
@@ -666,6 +672,9 @@
 
     },
     "Show Outline" : {
+
+    },
+    "Sidebar" : {
 
     },
     "Size:" : {
@@ -891,6 +900,9 @@
 
     },
     "“%@” couldn’t be reopened." : {
+
+    },
+    "“%@” was changed by another application." : {
 
     }
   },

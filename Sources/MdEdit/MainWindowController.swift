@@ -45,7 +45,7 @@ final class MainWindowController: NSWindowController {
     /// Owns the editors as real child view controllers, so their lifecycle runs
     /// and the responder chain reaches this controller.
     private let contentController = NSViewController()
-    private var currentEditor: EditorViewController?
+    private(set) var currentEditor: EditorViewController?
     private var theme: Theme = .current(for: NSApp.effectiveAppearance)
     private var appearanceObservation: NSKeyValueObservation?
 
@@ -81,6 +81,16 @@ final class MainWindowController: NSWindowController {
     /// the encoding it was read in; a sheet unless a test answers instead.
     lazy var askToConvertToUTF8: (Document, @escaping (Bool) -> Void) -> Void = { [weak self] document, answer in
         self?.presentConvertAlert(for: document, answer: answer)
+    }
+    /// Asks whether to save over changes another app made to the file since
+    /// it was read; a sheet unless a test answers instead.
+    lazy var askToOverwriteChangesOnDisk: (Document, @escaping (Bool) -> Void) -> Void = { [weak self] document, answer in
+        self?.presentOverwriteAlert(for: document, answer: answer)
+    }
+    /// Shows an error; a sheet unless a test listens instead.
+    lazy var showError: (Error) -> Void = { [weak self] error in
+        guard let window = self?.window else { return }
+        NSAlert(error: error).beginSheetModal(for: window)
     }
     /// Tells which of the last session's files could not be reopened; a
     /// sheet unless a test listens instead.
@@ -623,15 +633,25 @@ final class MainWindowController: NSWindowController {
 
     /// Saves, offering UTF-8 when the text no longer fits the file's own
     /// encoding: without that, every save and Save As would fail alike.
-    private func write(_ document: Document, to target: URL? = nil, completion: @escaping (Bool) -> Void) {
+    private func write(
+        _ document: Document, to target: URL? = nil, overwritingChanges: Bool = false,
+        completion: @escaping (Bool) -> Void
+    ) {
         do {
-            try document.save(to: target)
+            try document.save(to: target, overwritingChanges: overwritingChanges)
             completion(true)
+        } catch is Document.ChangedOnDiskError {
+            // Another app wrote the file since it was read: saving blindly
+            // would throw its changes away unseen.
+            askToOverwriteChangesOnDisk(document) { [weak self] overwrite in
+                guard overwrite, let self else { return completion(false) }
+                write(document, to: target, overwritingChanges: true, completion: completion)
+            }
         } catch let error as CocoaError where error.code == .fileWriteInapplicableStringEncoding && document.format.encoding != .utf8 {
             askToConvertToUTF8(document) { [weak self] convert in
                 guard convert, let self else { return completion(false) }
                 document.format.encoding = .utf8
-                write(document, to: target, completion: completion)
+                write(document, to: target, overwritingChanges: overwritingChanges, completion: completion)
             }
         } catch {
             show(error: error)
@@ -646,6 +666,16 @@ final class MainWindowController: NSWindowController {
         alert.messageText = String(localized: "“\(document.displayName)” can’t be saved as \(encoding).")
         alert.informativeText = String(localized: "Some of its text has no \(encoding) form. Saving it as UTF-8 keeps all of it.")
         alert.addButton(withTitle: String(localized: "Save as UTF-8"))
+        alert.addButton(withTitle: String(localized: "Cancel"))
+        alert.beginSheetModal(for: window) { answer($0 == .alertFirstButtonReturn) }
+    }
+
+    private func presentOverwriteAlert(for document: Document, answer: @escaping (Bool) -> Void) {
+        guard let window else { return answer(false) }
+        let alert = NSAlert()
+        alert.messageText = String(localized: "“\(document.displayName)” was changed by another application.")
+        alert.informativeText = String(localized: "Saving now replaces those changes with yours.")
+        alert.addButton(withTitle: String(localized: "Save Anyway"))
         alert.addButton(withTitle: String(localized: "Cancel"))
         alert.beginSheetModal(for: window) { answer($0 == .alertFirstButtonReturn) }
     }
@@ -709,7 +739,7 @@ final class MainWindowController: NSWindowController {
         guard askingAboutExternalChange.insert(key).inserted else { return }
         askAboutExternalChange(document) { [weak self] reload in
             self?.askingAboutExternalChange.remove(key)
-            guard reload else { return }
+            guard reload else { return document.keepEditsOverChangeOnDisk() }
             self?.reloadFromDisk(document)
         }
     }
@@ -723,14 +753,30 @@ final class MainWindowController: NSWindowController {
         reloads[id] = Task { [weak self, weak document] in
             defer { self?.reloads[id] = nil }
             guard let document else { return }
-            if (try? await document.revert(using: readFile)) == false {
-                self?.handleExternalChange(of: document)
+            do {
+                if try await document.revert(using: readFile) == false {
+                    self?.handleExternalChange(of: document)
+                    return
+                }
+            } catch {
+                // The editor still holds the old text, which no longer is
+                // what the file holds: say so rather than pass it off as
+                // current. Saving it asks before writing over the file.
+                // Once, however often a file that stays unreadable changes.
+                guard let self, documents.contains(where: { $0 === document }),
+                      unreadableOnDisk.insert(ObjectIdentifier(document)).inserted
+                else { return }
+                show(error: error)
                 return
             }
+            self?.unreadableOnDisk.remove(ObjectIdentifier(document))
             self?.refreshTabs()
             self?.refreshStatus()
         }
     }
+
+    /// Documents whose file could not be read again, already told about.
+    private var unreadableOnDisk: Set<ObjectIdentifier> = []
 
     private func presentExternalChangeAlert(for document: Document, answer: @escaping (Bool) -> Void) {
         guard let window else { return answer(false) }
@@ -1025,11 +1071,19 @@ final class MainWindowController: NSWindowController {
 
     // MARK: - Recovery and session
 
+    var recoveryTiming = RecoveryStore.Timing()
+    /// When the oldest change not yet in a snapshot was made.
+    private var unsnapshottedSince: Date?
+
     private func scheduleRecoverySnapshot() {
+        let now = Date()
+        let firstChange = unsnapshottedSince ?? now
+        unsnapshottedSince = firstChange
         pendingSnapshot?.cancel()
         let work = DispatchWorkItem { [weak self] in self?.writeRecoverySnapshots() }
         pendingSnapshot = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2, execute: work)
+        let delay = recoveryTiming.delay(sinceFirstChange: now.timeIntervalSince(firstChange))
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
     }
 
     /// Writes a snapshot for every unsaved document changed since its last
@@ -1039,6 +1093,7 @@ final class MainWindowController: NSWindowController {
     func writeRecoverySnapshots(rewriting: Bool = false) {
         pendingSnapshot?.cancel()
         pendingSnapshot = nil
+        unsnapshottedSince = nil
         for document in documents {
             let state = Document.SnapshotState(generation: document.storage.editGeneration, url: document.url)
             if document.isDirty {
@@ -1060,6 +1115,7 @@ final class MainWindowController: NSWindowController {
     func cancelPendingWork() {
         pendingSnapshot?.cancel()
         pendingSnapshot = nil
+        unsnapshottedSince = nil
     }
 
     /// Whether this window has a file or unsaved snapshot for a URL.
@@ -1448,8 +1504,7 @@ final class MainWindowController: NSWindowController {
     }
 
     private func show(error: Error) {
-        guard let window else { return }
-        NSAlert(error: error).beginSheetModal(for: window)
+        showError(error)
     }
 }
 

@@ -118,10 +118,15 @@ final class Document {
     /// Called when the file changes underneath us.
     var onExternalChange: (() -> Void)?
     private var watcher: FileWatcher?
-    /// The file as our last save left it, so the watcher's news of that
-    /// save is not taken for someone else's: a change that leaves the file
-    /// otherwise, however soon after, is theirs.
-    private var lastWritten: FileStamp?
+    /// The file as last read or written here, so the watcher's news of our
+    /// own save is not taken for someone else's, and a save does not write
+    /// over a change it has not seen: a file left otherwise, however soon
+    /// after, was changed by someone else.
+    private var diskStamp: FileStamp?
+
+    /// The file changed on disk since it was last read or written here, so
+    /// saving would replace someone else's changes.
+    struct ChangedOnDiskError: Error {}
 
     init(id: UUID = UUID(), url: URL? = nil, text: String = "", theme: Theme) {
         self.id = id
@@ -146,7 +151,7 @@ final class Document {
             pendingExternalChange?.cancel()
             let change = DispatchWorkItem { [weak self] in
                 guard let self, let url = self.url else { return }
-                if let lastWritten, FileStamp(of: url.resolvingSymlinksInPath()) == lastWritten { return }
+                if let diskStamp, FileStamp(of: url.resolvingSymlinksInPath()) == diskStamp { return }
                 onExternalChange?()
             }
             pendingExternalChange = change
@@ -165,8 +170,12 @@ final class Document {
     ) async throws -> Bool {
         guard let url else { return true }
         let generation = storage.editGeneration
+        // Taken before reading: a write landing during the read then shows
+        // as a change still unseen, never as one already taken in.
+        let stamp = FileStamp(of: url.resolvingSymlinksInPath())
         let (text, format) = try await FileFormat.read(url, using: load)
         guard storage.editGeneration == generation, self.url == url else { return false }
+        diskStamp = stamp
         // Touched, or rewritten as it was (a sync, a checkout): reloading
         // would restyle the whole document for nothing.
         if text == savedText, !isDirty {
@@ -198,6 +207,13 @@ final class Document {
         guard text != storage.string else { return }
         storage.replaceCharacters(in: NSRange(location: 0, length: storage.length), with: text)
         undoManager.removeAllActions()
+    }
+
+    /// Takes the file as it now is for the one these edits are meant to
+    /// replace, once the user chose to keep them over a change on disk.
+    func keepEditsOverChangeOnDisk() {
+        guard let url else { return }
+        diskStamp = FileStamp(of: url.resolvingSymlinksInPath())
     }
 
     func markMissingOnDisk() {
@@ -234,6 +250,7 @@ final class Document {
         FileAccess.remember(url)
         let document = Document(url: url, text: text, theme: theme)
         document.format = format
+        document.diskStamp = FileStamp(of: url.resolvingSymlinksInPath())
         document.beginWatching()
         NSDocumentController.shared.noteNewRecentDocumentURL(url)
         // The file as found, before any of this session's edits.
@@ -241,7 +258,11 @@ final class Document {
         return document
     }
 
-    func save(to target: URL? = nil) throws {
+    /// Writes the text to its file, or to `target`. Throws
+    /// `ChangedOnDiskError`, writing nothing, when the document's own file
+    /// was changed by someone else since it was last read or written, unless
+    /// `overwritingChanges`.
+    func save(to target: URL? = nil, overwritingChanges: Bool = false) throws {
         guard let destination = target ?? url else { return }
         let contents = storage.string
         let data = try format.encode(contents)
@@ -249,12 +270,16 @@ final class Document {
         // new file into place, which would replace the link itself and leave
         // the real file as it was.
         let file = destination.resolvingSymlinksInPath()
+        // Save As to another file was already agreed to in the save panel.
+        if !overwritingChanges, destination == url, let found = FileStamp(of: file), found != diskStamp {
+            throw ChangedOnDiskError()
+        }
         if Self.linkCount(of: file) > 1 {
             try Self.writeInPlace(data, to: file)
         } else {
             try data.write(to: file, options: .atomic)
         }
-        lastWritten = FileStamp(of: file)
+        diskStamp = FileStamp(of: file)
         let needsWatcher = url != destination || isMissingOnDisk
         if url != destination { FileAccess.remember(destination) }
         url = destination

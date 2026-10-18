@@ -63,7 +63,13 @@ final class FileWatcher: @unchecked Sendable {
         DispatchQueue.main.asyncAfter(deadline: .now() + Self.retryDelay) { [weak self] in
             MainActor.assumeIsolated {
                 guard let self, self.source == nil else { return }
-                if !self.start(), attempt + 1 < Self.retries { self.restart(attempt: attempt + 1) }
+                if self.start() {
+                    // Back, perhaps after the change was looked at and the
+                    // file found missing: what it holds now is news too.
+                    self.onChange()
+                } else if attempt + 1 < Self.retries {
+                    self.restart(attempt: attempt + 1)
+                }
             }
         }
     }

@@ -100,6 +100,17 @@ struct RecoveryStoreTests {
         store.removeAll()
         #expect(store.snapshots().isEmpty)
     }
+    /// Each keystroke put the snapshot off by another two seconds, so
+    /// someone typing without a pause that long had nothing saved at all.
+    @Test("Snapshots wait for a pause, but never longer than the longest wait")
+    func timing() {
+        let timing = RecoveryStore.Timing(pause: 2, longest: 10)
+        #expect(timing.delay(sinceFirstChange: 0) == 2)
+        #expect(timing.delay(sinceFirstChange: 7) == 2)
+        #expect(timing.delay(sinceFirstChange: 9) == 1)
+        #expect(timing.delay(sinceFirstChange: 10) == 0)
+        #expect(timing.delay(sinceFirstChange: 60) == 0)
+    }
 }
 
 @Suite("Session")
@@ -359,5 +370,65 @@ struct FileOnDiskTests {
             try await Task.sleep(for: .milliseconds(100))
         }
         #expect(changes == 1)
+    }
+    /// Saving never looked at the file first, so whatever another app had
+    /// written to it since it was read was replaced without a word.
+    @Test("Saving over a change made on disk since the file was read writes nothing, unless told to")
+    func saveOverExternalChange() async throws {
+        let folder = try folder()
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let url = folder.appendingPathComponent("shared.md")
+        try "one\n".write(to: url, atomically: true, encoding: .utf8)
+        let document = try await Document.open(contentsOf: url, theme: .light)
+        document.storage.replaceCharacters(in: NSRange(location: 0, length: 3), with: "mine")
+        try "someone else's\n".write(to: url, atomically: true, encoding: .utf8)
+
+        #expect(throws: Document.ChangedOnDiskError.self) { try document.save() }
+        #expect(try String(contentsOf: url, encoding: .utf8) == "someone else's\n")
+        #expect(document.isDirty)
+
+        try document.save(overwritingChanges: true)
+        #expect(try String(contentsOf: url, encoding: .utf8) == "mine\n")
+        #expect(!document.isDirty)
+    }
+
+    @Test("Our own saves, a reload and edits kept over a change are not changes on disk")
+    func ownChangesSaveQuietly() async throws {
+        let folder = try folder()
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let url = folder.appendingPathComponent("mine.md")
+        try "one\n".write(to: url, atomically: true, encoding: .utf8)
+        let document = try await Document.open(contentsOf: url, theme: .light)
+        for word in ["two", "six"] {
+            document.storage.replaceCharacters(in: NSRange(location: 0, length: 3), with: word)
+            try document.save()
+        }
+
+        try "ten\n".write(to: url, atomically: true, encoding: .utf8)
+        try await document.revert()
+        document.storage.replaceCharacters(in: NSRange(location: 0, length: 3), with: "two")
+        try document.save()
+
+        try "theirs\n".write(to: url, atomically: true, encoding: .utf8)
+        document.keepEditsOverChangeOnDisk()
+        try document.save()
+        #expect(try String(contentsOf: url, encoding: .utf8) == "two\n")
+    }
+
+    /// A file deleted, then put back once the tab had marked it missing,
+    /// was written over by the next save with the tab's older text.
+    @Test("A file back after it went missing is not written over unasked")
+    func fileBackAfterMissing() async throws {
+        let folder = try folder()
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let url = folder.appendingPathComponent("back.md")
+        try "one\n".write(to: url, atomically: true, encoding: .utf8)
+        let document = try await Document.open(contentsOf: url, theme: .light)
+        try FileManager.default.removeItem(at: url)
+        document.markMissingOnDisk()
+        try "restored\n".write(to: url, atomically: true, encoding: .utf8)
+
+        #expect(throws: Document.ChangedOnDiskError.self) { try document.save() }
+        #expect(try String(contentsOf: url, encoding: .utf8) == "restored\n")
     }
 }

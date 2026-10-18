@@ -283,6 +283,96 @@ struct WindowFlowTests {
         #expect(!FileManager.default.fileExists(atPath: snapshot.path))
     }
 
+    @Test("Saving over a change on disk asks first; Cancel leaves the file as the other app wrote it")
+    func saveAsksOverExternalChange() async throws {
+        let controller = makeWindow()
+        let document = try await openEdited("conflict.md", in: controller)
+        let url = try #require(document.url)
+        try "theirs\n".write(to: url, atomically: true, encoding: .utf8)
+        var answers = [false, true]
+        var asked = 0
+        controller.askToOverwriteChangesOnDisk = { _, answer in asked += 1; answer(answers.removeFirst()) }
+
+        var saved: Bool?
+        controller.save(document: document) { saved = $0 }
+        #expect(saved == false)
+        #expect(try String(contentsOf: url, encoding: .utf8) == "theirs\n")
+        #expect(document.isDirty)
+
+        controller.save(document: document) { saved = $0 }
+        #expect(saved == true)
+        #expect(asked == 2)
+        #expect(try String(contentsOf: url, encoding: .utf8) == "edited saved\n")
+    }
+
+    @Test("Keeping my changes over a change on disk saves them without asking again")
+    func keepChangesThenSave() async throws {
+        let controller = makeWindow()
+        let document = try await openEdited("kept.md", in: controller)
+        let url = try #require(document.url)
+        try "theirs\n".write(to: url, atomically: true, encoding: .utf8)
+        controller.askAboutExternalChange = { _, answer in answer(false) }
+        var asked = 0
+        controller.askToOverwriteChangesOnDisk = { _, answer in asked += 1; answer(false) }
+
+        document.onExternalChange?()
+        var saved: Bool?
+        controller.save(document: document) { saved = $0 }
+        #expect(saved == true)
+        #expect(asked == 0)
+        #expect(try String(contentsOf: url, encoding: .utf8) == "edited saved\n")
+    }
+
+    /// A reload that failed was taken for one that worked: the tab kept the
+    /// old text as if it were the file's, and the next save wrote it over.
+    @Test("A file that can no longer be read says so once, and saving then asks first")
+    func failedReload() async throws {
+        let controller = makeWindow()
+        try FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: true)
+        let url = scratch.appendingPathComponent("unreadable.md")
+        try "saved\n".write(to: url, atomically: true, encoding: .utf8)
+        await controller.open(url: url)?.value
+        let document = try #require(controller.documents.first { $0.url == url })
+        var errors = 0
+        controller.showError = { _ in errors += 1 }
+        controller.readFile = { _ in throw CocoaError(.fileReadNoPermission) }
+        try "theirs\n".write(to: url, atomically: true, encoding: .utf8)
+
+        for _ in 0..<2 {
+            document.onExternalChange?()
+            await controller.finishReading()
+        }
+        #expect(errors == 1)
+        #expect(document.text == "saved\n")
+
+        var asked = 0
+        controller.askToOverwriteChangesOnDisk = { _, answer in asked += 1; answer(false) }
+        document.storage.replaceCharacters(in: NSRange(location: 0, length: 0), with: "edited ")
+        controller.save(document: document)
+        #expect(asked == 1)
+        #expect(try String(contentsOf: url, encoding: .utf8) == "theirs\n")
+    }
+
+    /// Every keystroke put the snapshot off again, so steady typing was
+    /// never snapshotted and a crash lost all of it.
+    @Test("Steady typing is still snapshotted, after the longest wait")
+    func recoveryDuringSteadyTyping() async throws {
+        let controller = makeWindow()
+        let document = try await openEdited("typing.md", in: controller)
+        controller.recoveryTiming = .init(pause: 0.3, longest: 0.6)
+        let textView = try #require(controller.currentEditor?.textView)
+        func recorded() -> String? { controller.recovery.snapshots().first { $0.id == document.id }?.text }
+
+        let start = Date()
+        while recorded() == nil, Date().timeIntervalSince(start) < 3 {
+            textView.insertText("x", replacementRange: NSRange(location: 0, length: 0))
+            try await Task.sleep(for: .milliseconds(50))
+        }
+        let elapsed = Date().timeIntervalSince(start)
+        #expect(recorded()?.hasSuffix("edited saved\n") == true)
+        #expect(elapsed < 2)
+    }
+
     @Test("⌘1…⌘8 pick a tab by position and ⌘9 the last; a tab number past the end does nothing")
     func selectTabByNumber() throws {
         let controller = makeWindow()

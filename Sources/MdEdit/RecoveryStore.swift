@@ -18,6 +18,22 @@ struct RecoveryStore {
 
     let directory: URL
 
+    /// When to write snapshots: once typing pauses, and while it does not,
+    /// still every so often. Waiting only for a pause wrote nothing for as
+    /// long as someone kept typing, and a crash then lost all of it.
+    struct Timing {
+        /// How long typing must pause before a snapshot is written.
+        var pause: TimeInterval = 2
+        /// The longest a change goes without a snapshot, pause or not.
+        var longest: TimeInterval = 10
+
+        /// How long from now to write, given how long ago the oldest change
+        /// not yet in a snapshot was made.
+        func delay(sinceFirstChange elapsed: TimeInterval) -> TimeInterval {
+            max(0, min(pause, longest - elapsed))
+        }
+    }
+
     static let standard = RecoveryStore(
         directory: FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("MdEdit/Recovery", isDirectory: true)
