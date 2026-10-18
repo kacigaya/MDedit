@@ -81,6 +81,62 @@ struct RichEditingTests {
         }
     }
 
+    /// Lines showing images that are never read, so nothing arrives but
+    /// what the test posts.
+    private func storageAwaitingImages(_ names: [String]) -> (MarkdownTextStorage, URL) {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("MdEditAwaiting-\(UUID().uuidString)")
+        let storage = MarkdownTextStorage(theme: .light)
+        storage.baseURL = folder.appendingPathComponent("doc.md")
+        let filler = String(repeating: "A paragraph of filler text.\n\n", count: 50)
+        let text = names.map { "![\($0)](\($0).png)\n\n" + filler }.joined()
+        storage.replaceCharacters(in: NSRange(location: 0, length: 0), with: text)
+        return (storage, folder)
+    }
+
+    /// Each arrival restyled every line still waiting for anything, so N
+    /// images or formulas arriving one by one cost N times N restyles.
+    @Test("An arrival restyles only the lines waiting for it, gathered over a moment")
+    func arrivalRestylesOwnLines() async throws {
+        let (storage, folder) = storageAwaitingImages(["a", "b", "c", "d"])
+        let text = storage.string as NSString
+        for name in ["a", "b", "c", "d"] {
+            let location = text.range(of: "![\(name)]").location
+            #expect(storage.linesAwaiting[.image(folder.appendingPathComponent("\(name).png"))] == IndexSet(integer: storage.line(at: location)))
+        }
+
+        let edits = EditRecorder()
+        storage.delegate = edits
+        NotificationCenter.default.post(name: ImageCache.didLoad, object: folder.appendingPathComponent("b.png"))
+        NotificationCenter.default.post(name: ImageCache.didLoad, object: folder.appendingPathComponent("d.png"))
+        // Arrivals in a burst wait to be restyled together.
+        #expect(edits.ranges.isEmpty)
+        for _ in 0..<50 where edits.ranges.count < 2 {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        let restyled = edits.ranges.map { text.substring(with: $0) }.sorted()
+        #expect(restyled == ["![b](b.png)\n", "![d](d.png)\n"])
+    }
+
+    @Test("Lines waiting for an image are found after edits move them")
+    func awaitedLinesFollowEdits() async throws {
+        let (storage, folder) = storageAwaitingImages(["a", "b", "c"])
+        // Lines added above, and a paragraph between the images removed.
+        storage.replaceCharacters(in: NSRange(location: 0, length: 0), with: "new\nlines\n\n")
+        let paragraph = (storage.string as NSString).range(of: "A paragraph of filler text.\n\n")
+        storage.replaceCharacters(in: paragraph, with: "")
+        let text = storage.string as NSString
+        for name in ["a", "b", "c"] {
+            let location = text.range(of: "![\(name)]").location
+            #expect(storage.linesAwaiting[.image(folder.appendingPathComponent("\(name).png"))] == IndexSet(integer: storage.line(at: location)))
+        }
+
+        let edits = EditRecorder()
+        storage.delegate = edits
+        NotificationCenter.default.post(name: ImageCache.didLoad, object: folder.appendingPathComponent("c.png"))
+        storage.restyleForArrivals()
+        #expect(edits.ranges.map { text.substring(with: $0) } == ["![c](c.png)\n"])
+    }
+
     @Test("A new column width rescales images without restyling the rest")
     func resizeIsLocal() async throws {
         let image = try writeImage(width: 600, height: 300)
@@ -95,7 +151,12 @@ struct RichEditingTests {
 
         let edits = EditRecorder()
         storage.delegate = edits
+        // A live resize passes through every width on the way; the restyle
+        // waits for it to settle.
+        storage.maxImageWidth = 400
         storage.maxImageWidth = 300
+        #expect(edits.ranges.isEmpty)
+        storage.restyleImagesForWidth()
         let inline = try #require(storage.attribute(.mdImage, at: line.location, effectiveRange: nil) as? InlineImage)
         #expect(inline.size == CGSize(width: 300, height: 150))
         #expect(edits.ranges.count == 1)

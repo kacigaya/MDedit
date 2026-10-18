@@ -44,14 +44,23 @@ final class MarkdownTextStorage: MDBackedTextStorage {
     var maxImageWidth: CGFloat = Metrics.defaultLineWidth {
         didSet {
             guard abs(maxImageWidth - oldValue) > 1 else { return }
-            if !requestedImages.isEmpty || !requestedTypesetting.isEmpty {
-                restyleLines(carrying: [.mdImage, .mdMath, .mdAwaiting])
-            }
             // Once the width settles: a view's first layouts pass through
-            // passing widths that would flip every table twice.
+            // passing widths that would flip every table twice, and dragging
+            // a window's edge rescaled every image and formula at each point
+            // of the drag. A delayed perform runs in the default run loop
+            // mode, which a live resize leaves for its own until the drag ends.
+            if !requestedImages.isEmpty || !requestedTypesetting.isEmpty {
+                NSObject.cancelPreviousPerformRequests(withTarget: self, selector: #selector(restyleImagesForWidth), object: nil)
+                perform(#selector(restyleImagesForWidth), with: nil, afterDelay: 0)
+            }
             NSObject.cancelPreviousPerformRequests(withTarget: self, selector: #selector(restyleTablesChangingFit), object: nil)
             perform(#selector(restyleTablesChangingFit), with: nil, afterDelay: 0)
         }
+    }
+
+    /// Rescales the images and formulas to the column, once its width settles.
+    @objc func restyleImagesForWidth() {
+        restyleLines(carrying: [.mdImage, .mdMath, .mdAwaiting])
     }
 
     /// Restyles the tables a new column width makes fit or no longer fit.
@@ -331,23 +340,30 @@ final class MarkdownTextStorage: MDBackedTextStorage {
     required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
 
     @objc private func imageDidLoad(_ notification: Notification) {
-        guard let url = notification.object as? URL, requestedImages.contains(url) else { return }
-        // Images tend to arrive in a burst; one restyle covers them all.
-        guard !isImageRestyleScheduled else { return }
-        isImageRestyleScheduled = true
-        perform(#selector(restyleForImages), with: nil, afterDelay: 0)
+        guard let url = notification.object as? URL else { return }
+        arrived(.image(url))
     }
 
     @objc private func typesettingDidRender(_ notification: Notification) {
-        guard let request = notification.userInfo?["request"] as? Typesetter.Request,
-              requestedTypesetting.contains(request),
-              !isImageRestyleScheduled
-        else { return }
-        isImageRestyleScheduled = true
-        perform(#selector(restyleForImages), with: nil, afterDelay: 0)
+        guard let request = notification.userInfo?["request"] as? Typesetter.Request else { return }
+        arrived(.typesetting(request))
     }
 
-    private var isImageRestyleScheduled = false
+    /// Notes an image or formula that lines here wait for. Opening a
+    /// math-heavy document or switching theme has hundreds arrive one by
+    /// one, a few milliseconds apart; gathering them for a moment restyles
+    /// each waiting line about once instead of once per arrival.
+    private func arrived(_ item: AwaitedItem) {
+        guard linesAwaiting[item] != nil else { return }
+        arrivals.insert(item)
+        guard !isArrivalRestyleScheduled else { return }
+        isArrivalRestyleScheduled = true
+        perform(#selector(restyleForArrivals), with: nil, afterDelay: 0.05)
+    }
+
+    private var isArrivalRestyleScheduled = false
+    /// Images and formulas that arrived since the last restyle for them.
+    private var arrivals: Set<AwaitedItem> = []
     private var isReferenceRestyleScheduled = false
     /// Labels whose definition came, went or changed since the last restyle.
     private var pendingReferenceLabels: Set<String> = []
@@ -378,14 +394,70 @@ final class MarkdownTextStorage: MDBackedTextStorage {
         restyle(lines: lines)
     }
 
-    @objc private func restyleForImages() {
-        isImageRestyleScheduled = false
-        restyleLines(carrying: [.mdAwaiting])
+    /// Restyles the lines that wait for what arrived, and only those: every
+    /// line still waiting was restyled on each arrival, so N images or
+    /// formulas cost N times N restyles.
+    @objc func restyleForArrivals() {
+        isArrivalRestyleScheduled = false
+        var lines = IndexSet()
+        for item in arrivals {
+            if let waiting = linesAwaiting[item] { lines.formUnion(waiting) }
+        }
+        arrivals = []
+        restyle(lines: lines)
     }
 
-    /// Whether the line being styled asked for an image or formula that is
-    /// not ready yet.
-    private var lineAwaits = false
+    /// Something a line shows once it is ready.
+    enum AwaitedItem: Hashable {
+        case image(URL)
+        case typesetting(Typesetter.Request)
+    }
+
+    /// What the line being styled asked for that is not ready yet.
+    private var lineAwaits: Set<AwaitedItem> = []
+    /// The lines waiting for each image or formula, so an arrival restyles
+    /// its own lines without a scan of the document.
+    private(set) var linesAwaiting: [AwaitedItem: IndexSet] = [:]
+    /// The same, by line, so restyling a line drops what it waited for.
+    private var awaitedByLine: [Int: Set<AwaitedItem>] = [:]
+
+    /// Records what a line just styled waits for, in place of what it waited
+    /// for before.
+    private func noteAwaits(line: Int, range: NSRange) {
+        if let previous = awaitedByLine.removeValue(forKey: line) {
+            for item in previous where !lineAwaits.contains(item) {
+                linesAwaiting[item]?.remove(line)
+                if linesAwaiting[item]?.isEmpty == true { linesAwaiting[item] = nil }
+            }
+        }
+        guard !lineAwaits.isEmpty else { return }
+        backing.addAttribute(.mdAwaiting, value: true, range: range)
+        awaitedByLine[line] = lineAwaits
+        for item in lineAwaits { linesAwaiting[item, default: IndexSet()].insert(line) }
+    }
+
+    /// Moves the waiting lines with an edit: lines it replaced are dropped,
+    /// to be styled again, and the lines after it shift. True when any of
+    /// the replaced lines was waiting.
+    private func shiftAwaits(dropping replaced: ClosedRange<Int>, by delta: Int) -> Bool {
+        guard !awaitedByLine.isEmpty else { return false }
+        var byLine: [Int: Set<AwaitedItem>] = [:]
+        var dropped = false
+        for (line, items) in awaitedByLine {
+            if replaced.contains(line) {
+                dropped = true
+            } else {
+                byLine[line > replaced.upperBound ? line + delta : line] = items
+            }
+        }
+        awaitedByLine = byLine
+        for (item, var lines) in linesAwaiting {
+            lines.remove(integersIn: replaced.lowerBound..<(replaced.upperBound + 1))
+            lines.shift(startingAt: replaced.upperBound + 1, by: delta)
+            linesAwaiting[item] = lines.isEmpty ? nil : lines
+        }
+        return dropped
+    }
 
     /// Restyles just the lines with any of these attributes: a scan of the
     /// runs, where restyling everything would rebuild them all.
@@ -481,6 +553,11 @@ final class MarkdownTextStorage: MDBackedTextStorage {
                 changeInLength: changeInLength
             )
             let lineDelta = structure.lineCount - oldLineCount
+            // The lines the edit now spans; those it replaced were numbered
+            // up to `editEnd - lineDelta` before it.
+            let editEnd = max(updated.lowerBound, line(at: NSMaxRange(editedRange)))
+            let replacedAwaiting = lineDelta != 0
+                && shiftAwaits(dropping: updated.lowerBound...max(updated.lowerBound, editEnd - lineDelta), by: lineDelta)
             blockLookup = nil
             tableLookup = nil
             if structure.touchedDefinitions {
@@ -503,14 +580,18 @@ final class MarkdownTextStorage: MDBackedTextStorage {
             }
             // The line above takes its spacing from whether this one is blank.
             var lineRange = max(0, updated.lowerBound - 1)...updated.upperBound
+            // A waiting line the edit ended on may have moved down intact,
+            // outside what was reparsed; styling it again says what it waits for.
+            if replacedAwaiting {
+                lineRange = lineRange.lowerBound...max(lineRange.upperBound, editEnd)
+            }
             // Lines a fold hid or now hides restyle too; old lines past the
             // end are clamped away. Hidden lines below the edit moved with
             // it, styling and all, so only lines whose state changed count:
             // every hidden line made each keystroke restyle up to the last fold.
             if !hiddenLines.isEmpty || !previouslyHidden.isEmpty {
-                // The lines the edit now spans, and where the old lines after it went.
+                // Where the old lines after the edit went.
                 let editStart = updated.lowerBound
-                let editEnd = max(editStart, line(at: NSMaxRange(editedRange)))
                 var shifted = previouslyHidden
                 shifted.shift(startingAt: editEnd - lineDelta + 1, by: lineDelta)
                 var changed = hiddenLines.symmetricDifference(shifted)
@@ -575,6 +656,9 @@ final class MarkdownTextStorage: MDBackedTextStorage {
         // array, and restyling over existing runs memmoves the rest of the
         // document per line (42 s rather than 3 s at 4.5 MB).
         backing.setAttributes([.font: theme.body], range: NSRange(location: 0, length: backing.length))
+        // Every line says again what it waits for.
+        linesAwaiting = [:]
+        awaitedByLine = [:]
         applyStyles(lineRange: 0...(structure.lineCount - 1))
         edited(.editedAttributes, range: NSRange(location: 0, length: backing.length), changeInLength: 0)
         endEditing()
@@ -642,9 +726,9 @@ final class MarkdownTextStorage: MDBackedTextStorage {
             guard let info = structure.info(forLine: line) else { continue }
             let lineRange = structure.index.range(ofLine: line)
             guard lineRange.length > 0 || lineRange.location < text.length else { continue }
-            lineAwaits = false
+            lineAwaits = []
             style(line: line, info: info, range: lineRange, text: text)
-            if lineAwaits { backing.addAttribute(.mdAwaiting, value: true, range: lineRange) }
+            noteAwaits(line: line, range: lineRange)
         }
 
         // A table's columns are as wide as their widest cell, so its rows are
@@ -662,10 +746,10 @@ final class MarkdownTextStorage: MDBackedTextStorage {
                 stylingTableAsSource = true
                 for row in table {
                     guard let info = structure.info(forLine: row) else { continue }
-                    lineAwaits = false
+                    lineAwaits = []
                     let range = structure.index.range(ofLine: row)
                     style(line: row, info: info, range: range, text: text)
-                    if lineAwaits { backing.addAttribute(.mdAwaiting, value: true, range: range) }
+                    noteAwaits(line: row, range: range)
                     // The width it needs, so a wider column shows it as a grid again.
                     backing.addAttribute(.mdTableRow, value: needed, range: range)
                 }
@@ -724,7 +808,7 @@ final class MarkdownTextStorage: MDBackedTextStorage {
                 (Typesetter.shared.rendering(for: request), Typesetter.shared.error(for: request))
             }
             typesetError = error
-            if rendering == nil, error == nil { lineAwaits = true }
+            if rendering == nil, error == nil { lineAwaits.insert(.typesetting(request)) }
             if let revealedLines, revealedLines.overlaps(block.lines) {
                 revealed = true
                 if line == block.lines.upperBound {
@@ -991,7 +1075,7 @@ final class MarkdownTextStorage: MDBackedTextStorage {
         guard let image = MainActor.assumeIsolated({ ImageCache.shared.image(for: url) }) else {
             // One that failed will not arrive: waiting for it restyled the
             // line on every other image and formula that did.
-            if !MainActor.assumeIsolated({ ImageCache.shared.hasFailed(url) }) { lineAwaits = true }
+            if !MainActor.assumeIsolated({ ImageCache.shared.hasFailed(url) }) { lineAwaits.insert(.image(url)) }
             return nil
         }
 
@@ -1542,7 +1626,7 @@ final class MarkdownTextStorage: MDBackedTextStorage {
                         pendingInlineMath.append((absolute, rendering))
                         continue
                     }
-                    if MainActor.assumeIsolated({ Typesetter.shared.error(for: request) }) == nil { lineAwaits = true }
+                    if MainActor.assumeIsolated({ Typesetter.shared.error(for: request) }) == nil { lineAwaits.insert(.typesetting(request)) }
                 }
                 backing.addAttributes([
                     .font: theme.mono,
