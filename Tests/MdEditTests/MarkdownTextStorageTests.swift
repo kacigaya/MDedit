@@ -167,6 +167,57 @@ struct MarkdownTextStorageTests {
         }
     }
 
+    /// Every keystroke in a table laid out all its rows again, measuring
+    /// every cell: tens of milliseconds in a long one.
+    @Test("Typing in a table cell restyles only its row while the columns stay put, and ends as a full restyle would")
+    func tableRowAlone() {
+        let rows = (0..<40).map { "| row \($0) | two |" }.joined(separator: "\n")
+        let storage = storage("| a much wider header cell | b |\n|---|---|\n" + rows + "\n\nafter\n")
+        let probe = NSAttributedString.Key("probe")
+        func far() -> NSRange { storage.characterRange(forLines: 32...32) }
+        storage.addAttribute(probe, value: true, range: far())
+        func matchesFresh() -> Bool {
+            storage.removeAttribute(probe, range: NSRange(location: 0, length: storage.length))
+            let fresh = self.storage(storage.string)
+            let whole = NSRange(location: 0, length: fresh.length)
+            return storage.attributedSubstring(from: whole).isEqual(to: fresh.attributedSubstring(from: whole))
+        }
+
+        let cell = (storage.string as NSString).range(of: "row 5 ").location + 5
+        storage.replaceCharacters(in: NSRange(location: cell, length: 0), with: "x")
+        #expect(storage.attribute(probe, at: far().location, effectiveRange: nil) != nil)
+        #expect(matchesFresh())
+
+        // Wider than the header, the cell moves the column: every row follows.
+        storage.addAttribute(probe, value: true, range: far())
+        storage.replaceCharacters(in: NSRange(location: cell, length: 0), with: String(repeating: "w", count: 40))
+        #expect(storage.attribute(probe, at: far().location, effectiveRange: nil) == nil)
+        #expect(matchesFresh())
+    }
+
+    /// Whether a paragraph is a definition list was decided by walking all
+    /// of it on each keystroke; now the lines beside the edit usually settle
+    /// it. Either way the answer must be the parser's.
+    @Test("A paragraph is styled as a definition list exactly when it reads as one")
+    func definitionListDecision() throws {
+        var generator = SystemRandomNumberGenerator()
+        for _ in 0..<300 {
+            let count = Int.random(in: 1...6, using: &generator)
+            let lines = (0..<count).map { index in Bool.random(using: &generator) ? ": d\(index)" : "t\(index)" }
+            let storage = storage("before\n\n" + lines.joined(separator: "\n") + "\n\nafter\n")
+            let isList = DefinitionList(lines: lines) != nil
+            // Each line asked in turn, as the caret moving through it would.
+            for line in 2..<(2 + count) {
+                storage.revealedLines = line...line
+                storage.revealedLines = nil
+            }
+            let first = (storage.string as NSString).range(of: lines[0]).location
+            let font = try #require(storage.attribute(.font, at: first, effectiveRange: nil) as? NSFont)
+            let isTerm = font.fontDescriptor.symbolicTraits.contains(.bold)
+            #expect(isTerm == (isList && !lines[0].hasPrefix(":")), "\(lines)")
+        }
+    }
+
     @Test("Every entry of a long definition list is styled as one, and long prose is not")
     func longDefinitionList() throws {
         let entries = (0..<200).map { "Term \($0)\n: Its definition." }.joined(separator: "\n")

@@ -17,24 +17,32 @@ struct CodeBlock: Equatable {
     @MainActor
     static func containing(line: Int, in storage: MarkdownTextStorage) -> CodeBlock? {
         let structure = storage.structure
-        guard let info = structure.info(forLine: line) else { return nil }
-        var open = line
-        switch info.kind {
-        case .fenceStart:
-            break
-        case .codeLine, .fenceEnd:
-            while open > 0, structure.info(forLine: open)?.kind.isFenceStart == false { open -= 1 }
-            guard structure.info(forLine: open)?.kind.isFenceStart == true else { return nil }
-        default:
-            return nil
+        // Asked on every keystroke and caret move, and a long block has many
+        // lines to walk: reading each line's kind in place, not copying its
+        // whole description, keeps that cheap.
+        let found: (open: Int, close: Int?)? = structure.lines.withUnsafeBufferPointer { lines in
+            guard lines.indices.contains(line) else { return nil }
+            var open = line
+            switch lines[line].kind {
+            case .fenceStart:
+                break
+            case .codeLine, .fenceEnd:
+                while open > 0, !lines[open].kind.isFenceStart { open -= 1 }
+                guard lines[open].kind.isFenceStart else { return nil }
+            default:
+                return nil
+            }
+            var cursor = open + 1
+            while cursor < lines.count {
+                switch lines[cursor].kind {
+                case .fenceEnd: return (open, cursor)
+                case .codeLine: cursor += 1
+                default: return (open, nil)
+                }
+            }
+            return (open, nil)
         }
-        var close: Int?
-        var cursor = open + 1
-        while let next = structure.info(forLine: cursor) {
-            if next.kind == .fenceEnd { close = cursor; break }
-            guard next.kind == .codeLine else { break }
-            cursor += 1
-        }
+        guard let (open, close) = found else { return nil }
 
         // The info string follows the run of backticks or tildes.
         let text = storage.text

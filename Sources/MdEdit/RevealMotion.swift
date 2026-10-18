@@ -30,8 +30,11 @@ struct RevealMotion {
     /// How far along, from 0 to 1, on a critically damped spring: quick off
     /// the mark, settling without overshoot.
     func progress(at time: CFTimeInterval = CACurrentMediaTime()) -> CGFloat {
+        // Compared before subtracting: with a large start (the time since
+        // boot), `(start + duration) - start` can round to just under
+        // `duration`, and the last frame then fell short of the end.
+        guard time < start + duration else { return 1 }
         let t = max(0, time - start)
-        guard t < duration else { return 1 }
         let omega = 16 / duration
         return CGFloat(1 - (1 + omega * t) * exp(-omega * t))
     }

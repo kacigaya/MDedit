@@ -474,6 +474,9 @@ final class MarkdownTextStorage: MDBackedTextStorage {
     }
 
     private func restyle(lines: IndexSet) {
+        // What arrived, or the width or definitions that changed, can change
+        // how wide a cell is without changing its text.
+        rowWidths.removeAll()
         restyle(ranges: lines.rangeView.compactMap { clampedLineRange($0.lowerBound...($0.upperBound - 1)) }.map(expandedToTypesetBlocks))
     }
 
@@ -481,13 +484,15 @@ final class MarkdownTextStorage: MDBackedTextStorage {
     /// are merged into one range from the first to the last, so a caret
     /// jumping from the top of a long document to the bottom had every line
     /// between refixed and laid out again: seconds, for two lines.
-    private func restyle(ranges: [ClosedRange<Int>]) {
+    /// `widening` widens each range as typing does, table rows aside.
+    private func restyle(ranges: [ClosedRange<Int>], widening: Bool = false) {
         for range in ranges {
             beginEditing()
-            applyStyles(lineRange: range)
-            edited(.editedAttributes, range: characterRange(forLines: range), changeInLength: 0)
+            let styled = widening ? styleWidened(range, linesKept: true) : range
+            if !widening { applyStyles(lineRange: range) }
+            edited(.editedAttributes, range: characterRange(forLines: styled), changeInLength: 0)
             endEditing()
-            pendingInvalidation = characterRange(forLines: range)
+            pendingInvalidation = characterRange(forLines: styled)
             flushPendingInvalidation()
         }
     }
@@ -602,8 +607,7 @@ final class MarkdownTextStorage: MDBackedTextStorage {
             }
             lineRange = clampedLineRange(lineRange) ?? lineRange
             // A formula or diagram is one image: editing a line of it redraws it all.
-            lineRange = expandedToDefinitionGaps(expandedToTypesetBlocks(lineRange))
-            applyStyles(lineRange: lineRange)
+            lineRange = styleWidened(lineRange, linesKept: lineDelta == 0)
             let restyled = characterRange(forLines: lineRange)
             // Styling sets each line's font afresh, taking emoji and CJK off
             // the fallback fonts that draw them; AppKit puts those back only
@@ -656,7 +660,8 @@ final class MarkdownTextStorage: MDBackedTextStorage {
         // array, and restyling over existing runs memmoves the rest of the
         // document per line (42 s rather than 3 s at 4.5 MB).
         backing.setAttributes([.font: theme.body], range: NSRange(location: 0, length: backing.length))
-        // Every line says again what it waits for.
+        // Every line says again what it waits for, and how wide its cells are.
+        rowWidths.removeAll()
         linesAwaiting = [:]
         awaitedByLine = [:]
         applyStyles(lineRange: 0...(structure.lineCount - 1))
@@ -707,14 +712,18 @@ final class MarkdownTextStorage: MDBackedTextStorage {
         }
         let changed = lines(old).symmetricDifference(lines(new))
         // A block that shows as an image opens and closes as a whole.
-        restyle(ranges: changed.rangeView.map { self.expandedToDefinitionGaps(self.expandedToTypesetBlocks($0.lowerBound...($0.upperBound - 1))) })
+        restyle(ranges: changed.rangeView.map { $0.lowerBound...($0.upperBound - 1) }, widening: true)
     }
 
-    private func applyStyles(lineRange: ClosedRange<Int>) {
+    /// Styles lines. With `rowsAlone`, the lines are rows of one grid table
+    /// and only they are laid out; false, then, when the table's columns
+    /// changed or it no longer fits, and the whole table must be styled.
+    @discardableResult
+    private func applyStyles(lineRange: ClosedRange<Int>, rowsAlone: Bool = false) -> Bool {
         let text = self.text
         let lower = max(0, lineRange.lowerBound)
         let upper = min(lineRange.upperBound, structure.lineCount - 1)
-        guard lower <= upper else { return }
+        guard lower <= upper else { return true }
         definitionLookup = nil
         typesetLookup = nil
         defer {
@@ -733,30 +742,59 @@ final class MarkdownTextStorage: MDBackedTextStorage {
 
         // A table's columns are as wide as their widest cell, so its rows are
         // laid out together once each is styled. Callers widen the range to
-        // whole tables.
-        guard !sourceMode else { return }
+        // whole tables, unless only some rows changed.
+        guard !sourceMode else { return true }
         var line = lower
         while line <= upper {
             guard let table = gridTable(containing: line) else {
                 line += 1
                 continue
             }
-            if let needed = layOutTable(table, text: text) {
-                // Too wide for the column: aligned source scrolls no worse than prose wraps.
-                stylingTableAsSource = true
-                for row in table {
-                    guard let info = structure.info(forLine: row) else { continue }
-                    lineAwaits = []
-                    let range = structure.index.range(ofLine: row)
-                    style(line: row, info: info, range: range, text: text)
-                    noteAwaits(line: row, range: range)
-                    // The width it needs, so a wider column shows it as a grid again.
-                    backing.addAttribute(.mdTableRow, value: needed, range: range)
-                }
-                stylingTableAsSource = false
+            let needed: CGFloat
+            switch layOutTable(table, text: text, only: rowsAlone ? lower...upper : nil) {
+            case .laidOut:
+                line = table.upperBound + 1
+                continue
+            case .columnsChanged:
+                return false
+            case let .tooWide(width):
+                if rowsAlone { return false }
+                needed = width
             }
+            // Too wide for the column: aligned source scrolls no worse than prose wraps.
+            stylingTableAsSource = true
+            for row in table {
+                guard let info = structure.info(forLine: row) else { continue }
+                lineAwaits = []
+                let range = structure.index.range(ofLine: row)
+                style(line: row, info: info, range: range, text: text)
+                noteAwaits(line: row, range: range)
+                // The width it needs, so a wider column shows it as a grid again.
+                backing.addAttribute(.mdTableRow, value: needed, range: range)
+            }
+            stylingTableAsSource = false
             line = table.upperBound + 1
         }
+        return true
+    }
+
+    /// Styles lines, widened to the whole formulas, diagrams and tables they
+    /// touch — except rows of a table changed in a way that leaves its
+    /// columns as they were, when only those rows are styled: every row of a
+    /// long table was laid out again on each keystroke. `linesKept` says no
+    /// lines came or went. Returns the lines styled.
+    private func styleWidened(_ lines: ClosedRange<Int>, linesKept: Bool) -> ClosedRange<Int> {
+        if linesKept, isRowsAlone(lines), applyStyles(lineRange: lines, rowsAlone: true) { return lines }
+        let widened = expandedToDefinitionGaps(expandedToTypesetBlocks(lines))
+        applyStyles(lineRange: widened)
+        return widened
+    }
+
+    /// Whether lines are body rows of one grid table with other rows to
+    /// compare columns with, and not its delimiter, which aligns them all.
+    private func isRowsAlone(_ lines: ClosedRange<Int>) -> Bool {
+        guard !sourceMode, let table = gridTable(containing: lines.lowerBound), table.contains(lines.upperBound) else { return false }
+        return !lines.contains(table.lowerBound + 1) && table.count - lines.count >= 2
     }
 
     private func style(line: Int, info: LineInfo, range: NSRange, text: NSString) {
@@ -1149,18 +1187,34 @@ final class MarkdownTextStorage: MDBackedTextStorage {
             let characters = structure.characters(of: text, line: paragraphLine)
             return Array(characters[min(lineInfo.contentStart, characters.count)...])
         }
+        func isDefinition(_ paragraphLine: Int) -> Bool {
+            body(paragraphLine).map { definitionStart($0) != nil } ?? false
+        }
         // The paragraph is looked at once per styling pass, not once a line:
-        // a long hard-wrapped one was quadratic.
+        // a long hard-wrapped one was quadratic. And not to its ends either:
+        // a list has no two lines in a row without `: ` (every term has a
+        // definition), so the first such pair settles it, usually right
+        // beside this line. Walking all of a long paragraph cost every
+        // keystroke in it time in proportion to its length.
         if definitionLookup?.lines.contains(line) != true {
-            var first = line, last = line
-            while first > 0, continues(first - 1) { first -= 1 }
-            while continues(last + 1) { last += 1 }
-            var lines: [String] = []
-            for paragraphLine in first...last where first < last {
-                guard let characters = body(paragraphLine) else { break }
-                lines.append(String(utf16CodeUnits: characters, count: characters.count))
-            }
-            definitionLookup = (first...last, first < last && lines.count == last - first + 1 && DefinitionList(lines: lines) != nil)
+            definitionLookup = {
+                var first = line, last = line
+                var firstIsDefinition = isDefinition(line), lastIsDefinition = firstIsDefinition
+                while first > 0, continues(first - 1) {
+                    let above = isDefinition(first - 1)
+                    if !above, !firstIsDefinition { return ((first - 1)...last, false) }
+                    first -= 1
+                    firstIsDefinition = above
+                }
+                while continues(last + 1) {
+                    let below = isDefinition(last + 1)
+                    if !below, !lastIsDefinition { return (first...(last + 1), false) }
+                    last += 1
+                    lastIsDefinition = below
+                }
+                // Opening with a term and closing with a definition, as DefinitionList requires.
+                return (first...last, first < last && !firstIsDefinition && lastIsDefinition)
+            }()
         }
         guard definitionLookup?.isList == true, let characters = body(line) else { return nil }
         return definitionStart(characters) != nil ? .definition : .term
@@ -1439,9 +1493,32 @@ final class MarkdownTextStorage: MDBackedTextStorage {
     /// concealed and the invisible pipe before it kerned, so the cell starts
     /// where its column does; the layout manager draws the lines between.
     /// When the table is too wide, changes nothing and returns the width it needs.
-    private func layOutTable(_ table: ClosedRange<Int>, text: NSString) -> CGFloat? {
+    private enum TableLayout {
+        case laidOut
+        /// Too wide for the column, needing this much.
+        case tooWide(CGFloat)
+        /// Laying out only some rows, the columns came out otherwise than the
+        /// other rows have them.
+        case columnsChanged
+    }
+
+    /// The width of each cell of a row, by what decides it: its text, and
+    /// whether it shows its markup or is the bold header.
+    private struct RowKey: Hashable {
+        var text: [UInt16]
+        var revealed: Bool
+        var header: Bool
+    }
+
+    /// Cell widths measured before: measuring every cell of a long table
+    /// again was a large part of each keystroke in it. Cleared whenever
+    /// something other than a row's own text may change them.
+    private var rowWidths: [RowKey: [CGFloat]] = [:]
+
+    private func layOutTable(_ table: ClosedRange<Int>, text: NSString, only: ClosedRange<Int>? = nil) -> TableLayout {
         let delimiterLine = table.lowerBound + 1
-        guard case let .tableDelimiter(alignments)? = structure.info(forLine: delimiterLine)?.kind else { return .infinity }
+        guard case let .tableDelimiter(alignments)? = structure.info(forLine: delimiterLine)?.kind else { return .tooWide(.infinity) }
+        if rowWidths.count > 20_000 { rowWidths.removeAll() }
         let showsDelimiter = revealedLines?.contains(delimiterLine) ?? false
 
         struct Row {
@@ -1460,7 +1537,12 @@ final class MarkdownTextStorage: MDBackedTextStorage {
             let split = line == delimiterLine
                 ? TableRowSplit(pipes: [], cells: [], leadingPipe: false)
                 : TableRowSplit(characters, from: info.contentStart)
-            let cellWidths = split.cells.map { visibleWidth(NSRange(location: range.location + $0.location, length: $0.length)) }
+            let key = RowKey(text: characters, revealed: revealedLines?.contains(line) ?? false, header: line == table.lowerBound)
+            let cellWidths = line == delimiterLine ? [] : rowWidths[key] ?? {
+                let measured = split.cells.map { visibleWidth(NSRange(location: range.location + $0.location, length: $0.length)) }
+                rowWidths[key] = measured
+                return measured
+            }()
             for (column, width) in cellWidths.enumerated() {
                 if column < widths.count { widths[column] = max(widths[column], width) } else { widths.append(width) }
             }
@@ -1468,17 +1550,24 @@ final class MarkdownTextStorage: MDBackedTextStorage {
         }
         guard let first = rows.first,
               let base = backing.attribute(.paragraphStyle, at: first.range.location, effectiveRange: nil) as? NSParagraphStyle
-        else { return .infinity }
+        else { return .tooWide(.infinity) }
 
         let padding = (theme.bodyFontSize * 0.75).rounded()
         var edges: [CGFloat] = [0]
         for width in widths { edges.append(edges[edges.count - 1] + ceil(width) + 2 * padding) }
         let indent = base.firstLineHeadIndent
-        guard indent + edges[edges.count - 1] <= maxImageWidth else { return indent + edges[edges.count - 1] }
+        guard indent + edges[edges.count - 1] <= maxImageWidth else { return .tooWide(indent + edges[edges.count - 1]) }
+        if let only {
+            // The rows left as they are must have their columns where these go.
+            guard let other = rows.first(where: { !only.contains($0.line) && $0.line != delimiterLine }),
+                  let grid = backing.attribute(.mdTableRow, at: other.range.location, effectiveRange: nil) as? TableGrid,
+                  grid.edges == edges, grid.indent == indent
+            else { return .columnsChanged }
+        }
 
         let verticalPadding = (theme.bodyFontSize * 0.45).rounded()
         let height = ceil(Self.lineHeightManager.defaultLineHeight(for: theme.body) + 2 * verticalPadding)
-        for row in rows {
+        for row in rows where only?.contains(row.line) ?? true {
             let isDelimiter = row.line == delimiterLine
             // Where each cell starts: in its column, as the delimiter aligns it.
             let starts = row.widths.enumerated().map { column, width in
@@ -1492,12 +1581,21 @@ final class MarkdownTextStorage: MDBackedTextStorage {
             }
 
             // Whitespace around cells goes; the pipes stay, invisible, to be kerned.
+            // A run of it at a time: one attribute change per character was
+            // much of what a keystroke in a long table cost.
             var outside = IndexSet(integersIn: 0..<(isDelimiter ? 0 : row.range.length))
             for cell in row.split.cells { outside.remove(integersIn: cell.location..<NSMaxRange(cell)) }
-            for offset in outside {
-                let unit = text.character(at: row.range.location + offset)
-                if unit == 0x20 || unit == 0x09 {
-                    backing.addAttribute(.mdConcealed, value: true, range: NSRange(location: row.range.location + offset, length: 1))
+            for span in outside.rangeView {
+                var offset = span.lowerBound
+                while offset < span.upperBound {
+                    guard Self.isSpaceOrTab(text.character(at: row.range.location + offset)) else {
+                        offset += 1
+                        continue
+                    }
+                    var end = offset + 1
+                    while end < span.upperBound, Self.isSpaceOrTab(text.character(at: row.range.location + end)) { end += 1 }
+                    backing.addAttribute(.mdConcealed, value: true, range: NSRange(location: row.range.location + offset, length: end - offset))
+                    offset = end
                 }
             }
             var firstIndent: CGFloat = isDelimiter ? padding : 0
@@ -1510,7 +1608,7 @@ final class MarkdownTextStorage: MDBackedTextStorage {
                 }
                 let pipe = NSRange(location: row.range.location + row.split.pipes[pipeIndex], length: 1)
                 let font = backing.attribute(.font, at: pipe.location, effectiveRange: nil) as? NSFont ?? theme.body
-                let advance = ("|" as NSString).size(withAttributes: [.font: font]).width
+                let advance = pipeAdvance(in: font)
                 backing.addAttribute(.kern, value: start - previousEnd - advance, range: pipe)
             }
             for pipe in row.split.pipes {
@@ -1540,7 +1638,20 @@ final class MarkdownTextStorage: MDBackedTextStorage {
                 .baselineOffset: verticalPadding,
             ], range: row.range)
         }
-        return nil
+        return .laidOut
+    }
+
+    private static func isSpaceOrTab(_ unit: unichar) -> Bool { unit == 0x20 || unit == 0x09 }
+
+    /// How wide `|` is in each font, measured once: every pipe of every row
+    /// measured it again on each keystroke.
+    private var pipeAdvances: [NSFont: CGFloat] = [:]
+
+    private func pipeAdvance(in font: NSFont) -> CGFloat {
+        if let advance = pipeAdvances[font] { return advance }
+        let advance = ("|" as NSString).size(withAttributes: [.font: font]).width
+        pipeAdvances[font] = advance
+        return advance
     }
 
     /// How wide a range draws: its glyphs less the concealed ones.

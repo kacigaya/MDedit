@@ -140,8 +140,8 @@ final class MarkdownLayoutManager: NSLayoutManager {
             rect.size.width = container.size.width
 
             if attributes[.mdCodeBlock] != nil {
-                let block = self.codeBlockRange(containing: lineCharacters.location, in: storage)
-                if drawnCodeBlocks.insert(block.location).inserted {
+                let block = self.codeBlockRange(containing: lineCharacters.location, in: storage, within: characterRange)
+                if drawnCodeBlocks.insert(block.range.location).inserted {
                     self.drawCodeCard(for: block, in: container, origin: origin)
                 }
             }
@@ -209,21 +209,42 @@ final class MarkdownLayoutManager: NSLayoutManager {
         index >= 0 && index < storage.length && storage.attribute(.mdCodeBlock, at: index, effectiveRange: nil) != nil
     }
 
-    /// The whole code block around a character, across line breaks
-    /// whether or not the breaks themselves carry the attribute.
-    private func codeBlockRange(containing index: Int, in storage: NSTextStorage) -> NSRange {
-        let text = storage.string as NSString
+    /// The part of a code block being drawn.
+    private struct CodeBlockPart {
+        var range: NSRange
+        /// The block goes on before or after what is drawn.
+        var continuesBefore: Bool
+        var continuesAfter: Bool
+    }
+
+    /// The code block around a character, across line breaks whether or not
+    /// the breaks themselves carry the attribute — looked for only a little
+    /// past the characters being drawn: following a long block to its ends,
+    /// a line at a time, on every redraw cost tens of milliseconds.
+    private func codeBlockRange(containing index: Int, in storage: NSTextStorage, within drawn: NSRange) -> CodeBlockPart {
+        let text = Self.text(of: storage)
+        // Two characters either side: enough to see a line break and the code beyond it.
+        let lower = max(0, drawn.location - 2)
+        let window = NSRange(location: lower, length: min(storage.length, NSMaxRange(drawn) + 2) - lower)
         var start = index
         var end = index
         func effective(_ at: Int) -> NSRange {
             var range = NSRange()
-            storage.attribute(.mdCodeBlock, at: at, longestEffectiveRange: &range, in: NSRange(location: 0, length: storage.length))
+            storage.attribute(.mdCodeBlock, at: at, longestEffectiveRange: &range, in: window)
             return range
         }
         var range = effective(index)
         start = range.location
         end = NSMaxRange(range)
+        var continuesBefore = false
+        var continuesAfter = false
         while true {
+            if start <= window.location,
+               isCode(at: start - 1, in: storage)
+                || (start >= 2 && text.character(at: start - 1) == 0x0A && isCode(at: start - 2, in: storage)) {
+                continuesBefore = true
+                break
+            }
             if isCode(at: start - 1, in: storage) {
                 start = effective(start - 1).location
             } else if start >= 2, text.character(at: start - 1) == 0x0A, isCode(at: start - 2, in: storage) {
@@ -231,28 +252,47 @@ final class MarkdownLayoutManager: NSLayoutManager {
             } else { break }
         }
         while true {
+            if end >= NSMaxRange(window),
+               isCode(at: end, in: storage)
+                || (end < storage.length - 1 && text.character(at: end) == 0x0A && isCode(at: end + 1, in: storage)) {
+                continuesAfter = true
+                break
+            }
             if isCode(at: end, in: storage) {
                 end = NSMaxRange(effective(end))
             } else if end < storage.length - 1, text.character(at: end) == 0x0A, isCode(at: end + 1, in: storage) {
                 end = NSMaxRange(effective(end + 1))
             } else { break }
         }
-        range = NSRange(location: start, length: end - start)
-        return range
+        return CodeBlockPart(
+            range: NSRange(location: start, length: end - start),
+            continuesBefore: continuesBefore,
+            continuesAfter: continuesAfter
+        )
     }
 
     /// Fills a code block as one card with rounded corners, around the
     /// lines that show text. Hidden fences are left outside it: their
     /// concealed glyphs ride on the line before, which would otherwise
     /// stretch the card over empty space.
-    private func drawCodeCard(for block: NSRange, in container: NSTextContainer, origin: NSPoint) {
+    ///
+    /// Only the part among the glyphs being drawn is looked at: walking
+    /// every line of a long block on each redraw cost a tenth of a second.
+    /// Where the block goes on past them, the card does too, out of sight.
+    private func drawCodeCard(for block: CodeBlockPart, in container: NSTextContainer, origin: NSPoint) {
         guard let storage = textStorage else { return }
-        let glyphs = glyphRange(forCharacterRange: block, actualCharacterRange: nil)
+        let glyphs = glyphRange(forCharacterRange: block.range, actualCharacterRange: nil)
         guard glyphs.length > 0 else { return }
-        let text = storage.string as NSString
+        let startsHere = !block.continuesBefore
+        let endsHere = !block.continuesAfter
+        let text = Self.text(of: storage)
         var top: CGFloat?
         var bottom: CGFloat = 0
+        var firstTop: CGFloat?
+        var lastBottom: CGFloat = 0
         enumerateLineFragments(forGlyphRange: glyphs) { _, usedRect, _, lineGlyphs, _ in
+            if firstTop == nil { firstTop = usedRect.minY }
+            lastBottom = usedRect.maxY
             let shown = lineGlyphs.intersection(glyphs) ?? NSRange(location: 0, length: 0)
             let showsText = (shown.location..<NSMaxRange(shown)).contains { glyph in
                 guard self.attribute(forGlyphAt: glyph) else { return false }
@@ -269,8 +309,12 @@ final class MarkdownLayoutManager: NSLayoutManager {
             if top == nil { top = usedRect.minY }
             bottom = usedRect.maxY
         }
-        guard let top, bottom > top else { return }
         let padding = Metrics.codeCardPadding
+        // Far enough past the edge that neither padding nor a rounded corner shows.
+        let overhang = padding + 2 * Metrics.codeCardRadius
+        if !startsHere, let firstTop { top = firstTop - overhang }
+        if !endsHere { bottom = lastBottom + overhang }
+        guard let top, bottom > top else { return }
         let card = NSRect(
             x: origin.x,
             y: origin.y + top - padding,

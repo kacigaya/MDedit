@@ -171,4 +171,46 @@ struct LayoutTests {
         #expect(motion.progress(at: motion.start) == 0)
         #expect(motion.progress(at: motion.start + motion.duration) == 1)
     }
+
+    /// Drawing a code block's card walked every line of the block, twice
+    /// over, on each redraw: a tenth of a second for a long one.
+    @Test("Drawing part of a long code block fills its card past both edges, at a cost that does not grow with the block")
+    func codeCardDrawsOnlyWhatShows() throws {
+        func drawMiddle(of lines: Int) throws -> (milliseconds: Double, edges: [NSColor], card: NSColor) {
+            let storage = MarkdownTextStorage(theme: .light)
+            storage.replaceCharacters(in: NSRange(location: 0, length: 0), with: "```\n" + String(repeating: "let x = 1\n", count: lines) + "```\n\nafter\n")
+            let (manager, container) = layoutManager(contiguous: true, for: storage)
+            let middle = NSRange(location: storage.length / 2, length: 600)
+            manager.ensureLayout(forCharacterRange: middle)
+            let glyphs = manager.glyphRange(forCharacterRange: middle, actualCharacterRange: nil)
+            let bounds = manager.boundingRect(forGlyphRange: glyphs, in: container)
+            let rep = try #require(NSBitmapImageRep(
+                bitmapDataPlanes: nil, pixelsWide: 600, pixelsHigh: Int(bounds.height), bitsPerSample: 8, samplesPerPixel: 4,
+                hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0
+            ))
+            NSGraphicsContext.saveGraphicsState()
+            NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
+            var best = Double.infinity
+            for _ in 0..<3 {
+                let start = Date()
+                manager.drawBackground(forGlyphRange: glyphs, at: NSPoint(x: 0, y: -bounds.minY))
+                best = min(best, Date().timeIntervalSince(start) * 1000)
+            }
+            NSGraphicsContext.restoreGraphicsState()
+            // The corners: where a card ending in view would round off.
+            let edges = [rep.colorAt(x: 1, y: 0), rep.colorAt(x: 1, y: rep.pixelsHigh - 1)].compactMap { $0 }
+            return (best, edges, try #require(storage.theme.codeBackground.usingColorSpace(.deviceRGB)))
+        }
+        func close(_ a: NSColor, _ b: NSColor) -> Bool {
+            guard let a = a.usingColorSpace(.deviceRGB) else { return false }
+            return abs(a.redComponent - b.redComponent) < 0.03 && abs(a.greenComponent - b.greenComponent) < 0.03
+                && abs(a.blueComponent - b.blueComponent) < 0.03
+        }
+
+        let short = try drawMiddle(of: 1_000)
+        let long = try drawMiddle(of: 20_000)
+        #expect(long.edges.count == 2 && long.edges.allSatisfy { close($0, long.card) }, "\(long.edges)")
+        // Twenty times the lines: about the same time, not twenty times it.
+        #expect(long.milliseconds < max(5, short.milliseconds * 4), "\(short.milliseconds) ms, then \(long.milliseconds) ms")
+    }
 }
