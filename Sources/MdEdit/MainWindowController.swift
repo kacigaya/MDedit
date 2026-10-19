@@ -138,10 +138,12 @@ final class MainWindowController: NSWindowController {
             window.center()
         }
 
-        // An empty unified toolbar puts the document title at the leading edge,
-        // beside the traffic lights, and gives the tab strip a row of its own.
+        // A unified toolbar holding only the sidebar button puts the document
+        // title at the leading edge, beside the traffic lights, and gives the
+        // tab strip a row of its own.
         let toolbar = NSToolbar(identifier: "MdEditToolbar")
         toolbar.displayMode = .iconOnly
+        toolbar.delegate = self
         window.toolbar = toolbar
         window.toolbarStyle = .unified
 
@@ -885,6 +887,8 @@ final class MainWindowController: NSWindowController {
     // MARK: - Sidebar
 
     @objc func toggleFiles(_ sender: Any?) { toggleSidebar(showing: .files) }
+    /// Shows or hides the sidebar on whichever pane it last showed.
+    @objc func toggleSidebarVisibility(_ sender: Any?) { setSidebarVisible(!isSidebarVisible) }
     @objc func toggleOutline(_ sender: Any?) { toggleSidebar(showing: .outline) }
 
     /// Shows the sidebar on a pane, or hides it if it is already showing that pane.
@@ -1557,6 +1561,8 @@ extension MainWindowController: NSMenuItemValidation {
             item.title = isSidebarVisible && sidebar.pane == .outline ? String(localized: "Hide Outline") : String(localized: "Show Outline")
         case #selector(toggleFiles(_:)):
             item.title = isSidebarVisible && sidebar.pane == .files ? String(localized: "Hide Files") : String(localized: "Show Files")
+        case #selector(toggleSidebarVisibility(_:)):
+            item.title = isSidebarVisible ? String(localized: "Hide Sidebar") : String(localized: "Show Sidebar")
         case #selector(tableRowAbove(_:)), #selector(tableRowBelow(_:)), #selector(tableDeleteRow(_:)),
              #selector(tableColumnBefore(_:)), #selector(tableColumnAfter(_:)), #selector(tableDeleteColumn(_:)),
              #selector(tableAlign(_:)), #selector(tableFormat(_:)):
@@ -1583,6 +1589,34 @@ extension MainWindowController: NSMenuItemValidation {
             break
         }
         return true
+    }
+}
+
+private extension NSToolbarItem.Identifier {
+    static let sidebar = Self("sidebar")
+}
+
+extension MainWindowController: NSToolbarDelegate {
+    func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] { [.sidebar] }
+    func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] { [.sidebar] }
+
+    func toolbar(_ toolbar: NSToolbar, itemForItemIdentifier identifier: NSToolbarItem.Identifier, willBeInsertedIntoToolbar flag: Bool) -> NSToolbarItem? {
+        guard identifier == .sidebar else { return nil }
+        // Not the system .toggleSidebar item, which AppKit builds itself and,
+        // without a split view, puts at the trailing edge: the sidebar's button
+        // belongs beside the traffic lights, ahead of the title.
+        let item = NSToolbarItem(itemIdentifier: identifier)
+        let label = String(localized: "Sidebar")
+        item.label = label
+        item.toolTip = String(localized: "Show or hide the sidebar")
+        item.image = NSImage(systemSymbolName: "sidebar.left", accessibilityDescription: label)
+        item.isBordered = true
+        item.isNavigational = true
+        // Not toggleSidebar(_:): NSWindow answers that itself, ahead of us in
+        // the responder chain.
+        item.target = self
+        item.action = #selector(toggleSidebarVisibility(_:))
+        return item
     }
 }
 

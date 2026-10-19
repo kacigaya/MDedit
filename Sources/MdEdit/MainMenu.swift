@@ -192,6 +192,7 @@ enum MainMenu {
                 add(tabs, "Last Tab", #selector(MainWindowController.selectDocumentTab(_:)), "9", tag: 9)
             })
             menu.addItem(.separator())
+            add(menu, "Show Sidebar", #selector(MainWindowController.toggleSidebarVisibility(_:)), "s", [.command, .control])
             add(menu, "Show Files", #selector(MainWindowController.toggleFiles(_:)), "e", [.command, .shift])
             add(menu, "Show Outline", #selector(MainWindowController.toggleOutline(_:)), "l", [.command, .shift])
             add(menu, "Statistics…", #selector(MainWindowController.showDocumentStatistics(_:)), "i", [.command, .shift])

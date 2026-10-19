@@ -257,7 +257,10 @@ final class FileTreeView: NSView {
     @objc private func rowClicked() {
         guard let node = outline.item(atRow: outline.clickedRow) as? FileNode else { return }
         if node.isDirectory {
-            outline.isItemExpanded(node) ? outline.collapseItem(node) : outline.expandItem(node)
+            // Through the animator, so a click on the name slides the rows
+            // open or shut as a click on the disclosure triangle does.
+            let tree = Motion.isEnabled ? outline.animator() : outline
+            outline.isItemExpanded(node) ? tree.collapseItem(node) : tree.expandItem(node)
         } else {
             onOpenFile?(node.url)
         }

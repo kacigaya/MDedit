@@ -336,6 +336,9 @@
     "Hide Outline" : {
 
     },
+    "Hide Sidebar" : {
+
+    },
     "Image, " : {
 
     },
@@ -672,6 +675,12 @@
 
     },
     "Show Outline" : {
+
+    },
+    "Show Sidebar" : {
+
+    },
+    "Show or hide the sidebar" : {
 
     },
     "Sidebar" : {
