@@ -5,6 +5,16 @@ workflow publishes the section for a version as its release notes.
 
 ## [Unreleased]
 
+## [1.2.2] - 2026-10-19
+
+### Added
+- A sidebar button beside the window's traffic lights, and View ▸ Show
+  Sidebar (⌃⌘S), show or hide the sidebar on the pane it last showed.
+
+### Changed
+- Clicking a folder's name in Files opens or closes it with the same
+  animation as its disclosure triangle.
+
 ## [1.2.1] - 2026-10-18
 
 ### Fixed
