@@ -5,6 +5,13 @@ workflow publishes the section for a version as its release notes.
 
 ## [Unreleased]
 
+## [1.2.3] - 2026-10-20
+
+### Fixed
+- Typing on a line that holds an emoji or CJK text no longer sometimes
+  throws the caret forward, past text it should stay before: typing
+  `- [ ]` could end up as `- [ ]]`.
+
 ## [1.2.2] - 2026-10-19
 
 ### Added
