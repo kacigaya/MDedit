@@ -608,6 +608,19 @@ final class MarkdownTextStorage: MDBackedTextStorage {
     /// since that font has no colon glyph; the emoji drawn there needs it back.
     override func fixAttributes(in range: NSRange) {
         super.fixAttributes(in: range)
+        restoreEmojiFonts(in: range)
+    }
+
+    /// Fixes attributes in the backing string alone, outside `edited`: run
+    /// during an edit, fixing through the storage widens the edited range,
+    /// and the layout manager then moves a caret at the edit to its end,
+    /// past whatever the fixing touched.
+    private func fixBackingAttributes(in range: NSRange) {
+        backing.fixAttributes(in: range)
+        restoreEmojiFonts(in: range)
+    }
+
+    private func restoreEmojiFonts(in range: NSRange) {
         backing.enumerateAttribute(.mdEmoji, in: range) { value, emojiRange, _ in
             guard value != nil,
                   let size = (backing.attribute(.font, at: emojiRange.location, effectiveRange: nil) as? NSFont)?.pointSize,
@@ -690,15 +703,15 @@ final class MarkdownTextStorage: MDBackedTextStorage {
             // Styling sets each line's font afresh, taking emoji and CJK off
             // the fallback fonts that draw them; AppKit puts those back only
             // in the edited range, so the rest of these lines would show
-            // nothing where they were.
+            // nothing where they were. The invalidation below covers them.
             let edited = editedRange
             let before = min(edited.location, NSMaxRange(restyled))
             if before > restyled.location {
-                fixAttributes(in: NSRange(location: restyled.location, length: before - restyled.location))
+                fixBackingAttributes(in: NSRange(location: restyled.location, length: before - restyled.location))
             }
             if NSMaxRange(restyled) > NSMaxRange(edited) {
                 let after = max(NSMaxRange(edited), restyled.location)
-                fixAttributes(in: NSRange(location: after, length: NSMaxRange(restyled) - after))
+                fixBackingAttributes(in: NSRange(location: after, length: NSMaxRange(restyled) - after))
             }
             pendingInvalidation = restyled
         }

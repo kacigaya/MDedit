@@ -292,6 +292,16 @@ struct TypingTests {
         #expect(word.string == "(word")
     }
 
+    @Test("Typing before an emoji or CJK on the line keeps the caret after what was typed")
+    func caretBeforeFallbackFont() {
+        for line in ["a 😀", "a 漢字"] {
+            let (textView, input) = makeTextView(line)
+            textView.setSelectedRange(NSRange(location: 1, length: 0))
+            type("x", textView, input)
+            #expect(textView.selectedRange() == NSRange(location: 2, length: 0), "\(line)")
+        }
+    }
+
     @Test("Backspace inside an empty pair removes both halves")
     func deletePair() {
         let (textView, input) = makeTextView("x()")

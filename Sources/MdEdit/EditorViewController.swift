@@ -23,6 +23,10 @@ final class EditorViewController: NSViewController {
 
     private(set) var theme: Theme = .current(for: NSApp.effectiveAppearance)
 
+    /// The clipboard that link commands read and Copy Code writes; a private
+    /// one in tests, which the system's is shared with every other process.
+    var pasteboard: NSPasteboard = .general
+
     /// Called when the caret moves, so the window can refresh the status pill.
     var onSelectionChange: (() -> Void)?
     /// Called after every edit, so the window can refresh tab dirty state.
@@ -288,7 +292,6 @@ final class EditorViewController: NSViewController {
 
     private func copyCodeBlock() {
         guard let block = currentCodeBlock else { return }
-        let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
         pasteboard.setString(block.code(in: storage), forType: .string)
     }

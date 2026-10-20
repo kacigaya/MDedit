@@ -60,16 +60,14 @@ struct MarkdownCommandsTests {
 
     @Test("Link uses a URL on the clipboard and selects it")
     func linkFromClipboard() {
-        let pasteboard = NSPasteboard.general
-        let saved = pasteboard.string(forType: .string)
-        defer {
-            pasteboard.clearContents()
-            if let saved { pasteboard.setString(saved, forType: .string) }
-        }
+        // Not the system clipboard, which other processes write to.
+        let pasteboard = NSPasteboard.withUniqueName()
+        defer { pasteboard.releaseGlobally() }
         pasteboard.clearContents()
         pasteboard.setString("https://example.com", forType: .string)
 
         let (document, editor, _) = makeEditor("see docs here\n", selection: NSRange(location: 4, length: 4))
+        editor.pasteboard = pasteboard
         editor.insertLink()
         #expect(document.text == "see [docs](https://example.com) here\n")
         #expect(selected(editor) == "https://example.com")
@@ -77,6 +75,7 @@ struct MarkdownCommandsTests {
         pasteboard.clearContents()
         pasteboard.setString("not a url", forType: .string)
         let (plain, plainEditor, _) = makeEditor("see docs\n", selection: NSRange(location: 4, length: 4))
+        plainEditor.pasteboard = pasteboard
         plainEditor.insertLink()
         #expect(plain.text == "see [docs]()\n")
         #expect(plainEditor.textView.selectedRange() == NSRange(location: 11, length: 0))

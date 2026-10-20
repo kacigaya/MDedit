@@ -608,7 +608,7 @@ extension EditorViewController {
     /// holds one, already in place.
     private func insertEmptyLink() {
         let location = textView.selectedRange().location
-        let clipboard = NSPasteboard.general.string(forType: .string)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let clipboard = pasteboard.string(forType: .string)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let destination = looksLikeURL(clipboard) ? clipboard : ""
         replace(
             NSRange(location: location, length: 0),

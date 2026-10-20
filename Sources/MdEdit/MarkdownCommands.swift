@@ -114,7 +114,7 @@ extension EditorViewController {
             range = wordRange(around: range.location)
         }
         let selected = text.substring(with: range)
-        let clipboard = NSPasteboard.general.string(forType: .string) ?? ""
+        let clipboard = pasteboard.string(forType: .string) ?? ""
         let destination = looksLikeURL(clipboard) ? clipboard : ""
 
         let replacement = "[\(selected)](\(destination))"
